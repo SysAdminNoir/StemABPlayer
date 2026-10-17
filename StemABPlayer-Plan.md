@@ -128,8 +128,8 @@ Original (A) is any common file (WAV/FLAC/MP3/M4A) decoded to float32 stereo.
    the dark Fluent shell and a WASAPI device enumerates. ✅ **Done** — commit `bc68afc`: .NET 8 pinned
    (`global.json` 8.0.426), NAudio 2.2.1 device enumeration + passing test, Win2D 1.4.0 on WindowsAppSDK 2.5.1,
    App converted to unpackaged .exe; dark shell + device list verified on real hardware.
-2. **Audio engine first (zero-lag spine).** Split into three checkpoints, each sized to fit roughly one ~5-hour
-   Pro usage window and to end on a clean commit:
+2. **Audio engine first (zero-lag spine).** ✅ **Done** (2a→2c, see git log). Split into three checkpoints, each
+   sized to fit roughly one ~5-hour Pro usage window and ending on a clean commit:
    - **2a — Decode to RAM.** Load + decode + resample one stereo file to float32 at the device rate, fully in
      memory. WAV via NAudio's managed reader; **AAC / M4A via Windows Media Foundation** (`MediaFoundationReader`)
      — never ffmpeg. Build the waveform peak-cache stub. Headless unit tests on a short fixture (sample count,
