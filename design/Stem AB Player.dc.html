@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0f0f0f;}
+a{color:#60CDFF;}
+a:hover{color:#99EBFF;}
+button{font-family:inherit;white-space:nowrap;}
+</style>
+</helmet>
+<div style="width:100vw;height:100vh;min-width:1280px;min-height:760px;display:flex;flex-direction:column;background:#202020;color:#ffffff;font-family:'Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;font-size:14px;overflow:hidden;box-sizing:border-box;user-select:none;">
+
+  <div data-screen-label="Title bar" style="height:40px;flex:none;display:flex;align-items:center;padding-left:16px;gap:12px;">
+    <div style="width:16px;height:16px;border-radius:4px;overflow:hidden;display:flex;flex:none;">
+      <div style="flex:1;background:#60CDFF;"></div>
+      <div style="flex:1;background:#e8e8e8;"></div>
+    </div>
+    <div style="font-size:12px;color:#ffffff;">Stem A/B</div>
+    <div style="font-size:12px;color:#9a9a9a;">Midnight Drive (Master).flac  ·  Midnight Drive.stem.wav</div>
+    <div style="flex:1;"></div>
+    <div style="display:flex;align-self:stretch;">
+      <div style="width:46px;display:flex;align-items:center;justify-content:center;" style-hover="background:#2d2d2d;"><svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="#fff" stroke-width="1"></line></svg></div>
+      <div style="width:46px;display:flex;align-items:center;justify-content:center;" style-hover="background:#2d2d2d;"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" rx="1.5" fill="none" stroke="#fff" stroke-width="1"></rect></svg></div>
+      <div style="width:46px;display:flex;align-items:center;justify-content:center;" style-hover="background:#c42b1c;"><svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="#fff" stroke-width="1"></line><line x1="10" y1="0" x2="0" y2="10" stroke="#fff" stroke-width="1"></line></svg></div>
+    </div>
+  </div>
+
+  <div data-screen-label="Command bar" style="flex:none;display:flex;align-items:center;gap:8px;padding:4px 12px 10px;">
+    <button style="height:32px;padding:0 14px;border-radius:4px;background:#2d2d2d;border:1px solid #383838;border-bottom-color:#2f2f2f;color:#fff;font-size:14px;cursor:pointer;" style-hover="background:#323232;">Open original…</button>
+    <button style="height:32px;padding:0 14px;border-radius:4px;background:#2d2d2d;border:1px solid #383838;border-bottom-color:#2f2f2f;color:#fff;font-size:14px;cursor:pointer;" style-hover="background:#323232;">Open stem file…</button>
+    <div style="width:1px;height:20px;background:#3a3a3a;margin:0 6px;"></div>
+    <div style="display:flex;padding:2px;gap:2px;background:#272727;border:1px solid #363636;border-radius:5px;">
+      <button onClick="{{ setWave }}" style="height:28px;padding:0 14px;border:none;border-radius:4px;font-size:14px;cursor:pointer;background:{{ waveBg }};color:{{ waveColor }};">Waveform</button>
+      <button onClick="{{ setSpec }}" style="height:28px;padding:0 14px;border:none;border-radius:4px;font-size:14px;cursor:pointer;background:{{ specBg }};color:{{ specColor }};">Spectrogram</button>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="font-size:12px;color:#9a9a9a;">Output</div>
+    <div style="height:32px;padding:0 12px;border-radius:4px;background:#2d2d2d;border:1px solid #383838;display:flex;align-items:center;gap:24px;font-size:14px;color:#fff;">
+      <span>Speakers (USB Audio) · WASAPI</span>
+      <svg width="10" height="6" viewBox="0 0 10 6"><polyline points="1,1 5,5 9,1" fill="none" stroke="#c5c5c5" stroke-width="1.2"></polyline></svg>
+    </div>
+  </div>
+
+  <div style="flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;padding:0 12px;">
+
+    <div data-screen-label="A · Original" style="display:flex;flex-direction:column;min-height:0;background:#272727;border:1px solid #303030;border-radius:8px;overflow:hidden;">
+      <div style="flex:none;display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid #303030;">
+        <div style="width:28px;height:28px;border-radius:4px;background:#60CDFF;color:#000;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:15px;flex:none;">A</div>
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:14px;font-weight:600;">Original</div>
+          <div style="font-size:12px;color:#c5c5c5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Midnight Drive (Master).flac</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+          <span style="padding:2px 8px;border-radius:4px;background:#2f2f2f;border:1px solid #383838;font-size:12px;color:#c5c5c5;">FLAC</span>
+          <span style="padding:2px 8px;border-radius:4px;background:#2f2f2f;border:1px solid #383838;font-size:12px;color:#c5c5c5;">44.1 kHz · 24-bit</span>
+          <span style="padding:2px 8px;border-radius:4px;background:#2f2f2f;border:1px solid #383838;font-size:12px;color:#c5c5c5;">Stereo</span>
+        </div>
+        <div style="width:1px;height:28px;background:#3a3a3a;"></div>
+        <div style="text-align:right;flex:none;width:64px;">
+          <div style="font-size:11px;color:#9a9a9a;">Mix gain</div>
+          <div style="font-size:13px;font-family:'Cascadia Mono',Consolas,monospace;">{{ gAdb }}</div>
+        </div>
+      </div>
+      <div style="flex:1;min-height:0;position:relative;display:flex;flex-direction:column;">
+        <div style="height:22px;flex:none;position:relative;margin-left:176px;border-bottom:1px solid #303030;">
+          <sc-for list="{{ ticks }}" as="tick" hint-placeholder-count="8">
+            <div style="position:absolute;top:0;bottom:0;left:{{ tick.left }};border-left:1px solid #3a3a3a;padding-left:4px;font-size:11px;color:#9a9a9a;line-height:22px;">{{ tick.label }}</div>
+          </sc-for>
+        </div>
+        <sc-for list="{{ origLanes }}" as="item" hint-placeholder-count="2">
+          <div style="flex:1;min-height:0;display:flex;border-bottom:1px solid #2f2f2f;">
+            <div style="width:176px;flex:none;box-sizing:border-box;padding:0 14px;display:flex;flex-direction:column;justify-content:center;gap:8px;border-right:1px solid #303030;">
+              <div>
+                <div style="font-size:13px;font-weight:600;">{{ item.name }}</div>
+                <div style="font-size:11px;color:#9a9a9a;">{{ item.ch }}</div>
+              </div>
+              <div style="height:4px;border-radius:2px;background:#353535;overflow:hidden;">
+                <div style="height:100%;width:{{ item.level }};background:oklch(0.78 0.15 145);"></div>
+              </div>
+            </div>
+            <div onClick="{{ seek }}" style="flex:1;min-width:0;position:relative;background:#161616;cursor:pointer;">
+              <canvas ref="{{ item.ref }}" style="position:absolute;inset:0;width:100%;height:100%;display:block;"></canvas>
+              <div style="position:absolute;left:0;top:0;bottom:0;width:{{ playedPct }};background:rgba(0,0,0,0.32);pointer-events:none;"></div>
+            </div>
+          </div>
+        </sc-for>
+        <div style="position:absolute;top:0;bottom:0;left:{{ phLeft }};width:2px;margin-left:-1px;background:#ffffff;pointer-events:none;">
+          <div style="position:absolute;top:-5px;left:-4px;width:10px;height:10px;background:#ffffff;transform:rotate(45deg);"></div>
+        </div>
+      </div>
+    </div>
+
+    <div data-screen-label="B · Stems" style="display:flex;flex-direction:column;min-height:0;background:#272727;border:1px solid #303030;border-radius:8px;overflow:hidden;">
+      <div style="flex:none;display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid #303030;">
+        <div style="width:28px;height:28px;border-radius:4px;background:#e8e8e8;color:#000;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:15px;flex:none;">B</div>
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:14px;font-weight:600;">Stems</div>
+          <div style="font-size:12px;color:#c5c5c5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Midnight Drive.stem.wav</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+          <span style="padding:2px 8px;border-radius:4px;background:#2f2f2f;border:1px solid #383838;font-size:12px;color:#c5c5c5;">WAV</span>
+          <span style="padding:2px 8px;border-radius:4px;background:#2f2f2f;border:1px solid #383838;font-size:12px;color:#c5c5c5;">44.1 kHz · 32-bit float</span>
+          <span style="padding:2px 8px;border-radius:4px;background:#2f2f2f;border:1px solid #383838;font-size:12px;color:#c5c5c5;">{{ stemChip }}</span>
+        </div>
+        <div style="width:1px;height:28px;background:#3a3a3a;"></div>
+        <div style="text-align:right;flex:none;width:64px;">
+          <div style="font-size:11px;color:#9a9a9a;">Mix gain</div>
+          <div style="font-size:13px;font-family:'Cascadia Mono',Consolas,monospace;">{{ gBdb }}</div>
+        </div>
+      </div>
+      <div style="flex:1;min-height:0;position:relative;display:flex;flex-direction:column;">
+        <div style="height:22px;flex:none;position:relative;margin-left:176px;border-bottom:1px solid #303030;">
+          <sc-for list="{{ ticks }}" as="tick" hint-placeholder-count="8">
+            <div style="position:absolute;top:0;bottom:0;left:{{ tick.left }};border-left:1px solid #3a3a3a;padding-left:4px;font-size:11px;color:#9a9a9a;line-height:22px;">{{ tick.label }}</div>
+          </sc-for>
+        </div>
+        <sc-for list="{{ stems }}" as="item" hint-placeholder-count="4">
+          <div style="flex:1;min-height:0;display:flex;border-bottom:1px solid #2f2f2f;">
+            <div style="width:176px;flex:none;box-sizing:border-box;padding:0 12px 0 14px;display:flex;flex-direction:column;justify-content:center;gap:8px;border-right:1px solid #303030;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <div style="width:10px;height:10px;border-radius:2px;flex:none;background:{{ item.color }};"></div>
+                <div style="flex:1;min-width:0;">
+                  <div style="font-size:13px;font-weight:600;">{{ item.name }}</div>
+                  <div style="font-size:11px;color:#9a9a9a;">{{ item.ch }}</div>
+                </div>
+                <div style="display:flex;gap:4px;">
+                  <button title="Mute" onClick="{{ item.toggleMute }}" style="width:28px;height:24px;padding:0;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid {{ item.mBorder }};background:{{ item.mBg }};color:{{ item.mColor }};">M</button>
+                  <button title="Solo" onClick="{{ item.toggleSolo }}" style="width:28px;height:24px;padding:0;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid {{ item.sBorder }};background:{{ item.sBg }};color:{{ item.sColor }};">S</button>
+                </div>
+              </div>
+              <div style="height:4px;border-radius:2px;background:#353535;overflow:hidden;">
+                <div style="height:100%;width:{{ item.level }};background:{{ item.color }};"></div>
+              </div>
+            </div>
+            <div onClick="{{ seek }}" style="flex:1;min-width:0;position:relative;background:#161616;cursor:pointer;opacity:{{ item.laneOpacity }};">
+              <canvas ref="{{ item.ref }}" style="position:absolute;inset:0;width:100%;height:100%;display:block;"></canvas>
+              <div style="position:absolute;left:0;top:0;bottom:0;width:{{ playedPct }};background:rgba(0,0,0,0.32);pointer-events:none;"></div>
+            </div>
+          </div>
+        </sc-for>
+        <div style="position:absolute;top:0;bottom:0;left:{{ phLeft }};width:2px;margin-left:-1px;background:#ffffff;pointer-events:none;">
+          <div style="position:absolute;top:-5px;left:-4px;width:10px;height:10px;background:#ffffff;transform:rotate(45deg);"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div data-screen-label="Transport" style="flex:none;margin:8px 12px 12px;background:#272727;border:1px solid #303030;border-radius:8px;padding:14px 20px;display:grid;grid-template-columns:minmax(0,1fr) 620px minmax(0,1fr);align-items:center;gap:24px;">
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button title="Play / Pause (Space)" onClick="{{ togglePlay }}" style="width:48px;height:40px;border-radius:4px;border:1px solid #60CDFF;background:#60CDFF;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;" style-hover="background:#5ABBE8;">
+        <sc-if value="{{ playing }}" hint-placeholder-val="{{ false }}">
+          <svg width="14" height="14" viewBox="0 0 14 14"><rect x="2" y="1" width="3.5" height="12" rx="1" fill="#000"></rect><rect x="8.5" y="1" width="3.5" height="12" rx="1" fill="#000"></rect></svg>
+        </sc-if>
+        <sc-if value="{{ paused }}" hint-placeholder-val="{{ true }}">
+          <svg width="14" height="14" viewBox="0 0 14 14"><polygon points="3,1 13,7 3,13" fill="#000"></polygon></svg>
+        </sc-if>
+      </button>
+      <button title="Stop" onClick="{{ stop }}" style="width:40px;height:40px;border-radius:4px;background:#2d2d2d;border:1px solid #383838;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;" style-hover="background:#323232;">
+        <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1.5" fill="#fff"></rect></svg>
+      </button>
+      <button title="Loop" onClick="{{ toggleLoop }}" style="height:40px;padding:0 12px;border-radius:4px;font-size:14px;cursor:pointer;border:1px solid {{ loopBorder }};background:{{ loopBg }};color:{{ loopColor }};">Loop</button>
+      <div style="margin-left:14px;">
+        <div style="font-family:'Cascadia Mono',Consolas,monospace;font-size:24px;line-height:1.1;">{{ timeStr }}</div>
+        <div style="font-family:'Cascadia Mono',Consolas,monospace;font-size:12px;color:#9a9a9a;">/ 03:42.0</div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#c5c5c5;padding:0 46px;">
+        <span>A · Original</span>
+        <button onClick="{{ snapC }}" style="height:22px;padding:0 10px;border-radius:4px;background:transparent;border:1px solid #383838;color:#c5c5c5;font-size:12px;cursor:pointer;" style-hover="background:#2d2d2d;">Center</button>
+        <span>B · Stems</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button title="Full A (key A)" onClick="{{ snapA }}" style="width:36px;height:36px;border-radius:4px;font-size:15px;font-weight:600;cursor:pointer;padding:0;border:1px solid {{ aBorder }};background:{{ aBg }};color:{{ aColor }};">A</button>
+        <div style="display:flex;gap:2px;height:36px;">
+          <div style="width:5px;background:#353535;border-radius:1px;display:flex;align-items:flex-end;overflow:hidden;"><div style="width:100%;background:oklch(0.78 0.15 145);height:{{ mAL }};"></div></div>
+          <div style="width:5px;background:#353535;border-radius:1px;display:flex;align-items:flex-end;overflow:hidden;"><div style="width:100%;background:oklch(0.78 0.15 145);height:{{ mAR }};"></div></div>
+        </div>
+        <div onPointerDown="{{ xfDown }}" onPointerMove="{{ xfMove }}" onPointerUp="{{ xfUp }}" onDoubleClick="{{ snapC }}" style="flex:1;height:44px;position:relative;cursor:ew-resize;touch-action:none;">
+          <div style="position:absolute;left:0;right:0;top:16px;height:4px;border-radius:2px;background:#3a3a3a;"></div>
+          <div style="position:absolute;left:0;right:0;top:26px;height:8px;display:flex;justify-content:space-between;">
+            <div style="width:1px;height:8px;background:#5a5a5a;"></div>
+            <div style="width:1px;height:5px;background:#4a4a4a;"></div>
+            <div style="width:1px;height:5px;background:#4a4a4a;"></div>
+            <div style="width:1px;height:5px;background:#4a4a4a;"></div>
+            <div style="width:1px;height:8px;background:#8a8a8a;"></div>
+            <div style="width:1px;height:5px;background:#4a4a4a;"></div>
+            <div style="width:1px;height:5px;background:#4a4a4a;"></div>
+            <div style="width:1px;height:5px;background:#4a4a4a;"></div>
+            <div style="width:1px;height:8px;background:#5a5a5a;"></div>
+          </div>
+          <div style="position:absolute;top:2px;width:22px;height:32px;margin-left:-11px;border-radius:4px;background:#454545;border:1px solid #5c5c5c;box-sizing:border-box;box-shadow:0 2px 4px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;left:{{ xfPct }};">
+            <div style="width:2px;height:20px;border-radius:1px;background:#60CDFF;"></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:2px;height:36px;">
+          <div style="width:5px;background:#353535;border-radius:1px;display:flex;align-items:flex-end;overflow:hidden;"><div style="width:100%;background:oklch(0.78 0.15 145);height:{{ mBL }};"></div></div>
+          <div style="width:5px;background:#353535;border-radius:1px;display:flex;align-items:flex-end;overflow:hidden;"><div style="width:100%;background:oklch(0.78 0.15 145);height:{{ mBR }};"></div></div>
+        </div>
+        <button title="Full B (key B)" onClick="{{ snapB }}" style="width:36px;height:36px;border-radius:4px;font-size:15px;font-weight:600;cursor:pointer;padding:0;border:1px solid {{ bBorder }};background:{{ bBg }};color:{{ bColor }};">B</button>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:flex-end;gap:16px;">
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <div style="font-size:12px;color:#9a9a9a;">Fade curve</div>
+        <div style="display:flex;padding:2px;gap:2px;background:#202020;border:1px solid #363636;border-radius:5px;">
+          <button onClick="{{ setLinear }}" style="height:26px;padding:0 10px;border:none;border-radius:4px;font-size:13px;cursor:pointer;background:{{ linBg }};color:{{ linColor }};">Linear</button>
+          <button onClick="{{ setPower }}" style="height:26px;padding:0 10px;border:none;border-radius:4px;font-size:13px;cursor:pointer;background:{{ powBg }};color:{{ powColor }};">Equal power</button>
+        </div>
+      </div>
+      <div style="width:1px;height:36px;background:#3a3a3a;"></div>
+      <div style="display:flex;flex-direction:column;gap:4px;width:140px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:#9a9a9a;"><span>Master</span><span style="color:#fff;">80</span></div>
+        <div style="height:26px;position:relative;">
+          <div style="position:absolute;left:0;right:0;top:11px;height:4px;border-radius:2px;background:#4a4a4a;"></div>
+          <div style="position:absolute;left:0;width:80%;top:11px;height:4px;border-radius:2px;background:#60CDFF;"></div>
+          <div style="position:absolute;left:80%;top:3px;width:20px;height:20px;margin-left:-10px;border-radius:50%;background:#454545;border:1px solid #5c5c5c;box-sizing:border-box;display:flex;align-items:center;justify-content:center;">
+            <div style="width:10px;height:10px;border-radius:50%;background:#60CDFF;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;stemCount&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[4,6],&quot;default&quot;:4,&quot;tsType&quot;:&quot;4 | 6&quot;,&quot;section&quot;:&quot;Stem file&quot;},&quot;originalStyle&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;3-band&quot;,&quot;mono&quot;],&quot;default&quot;:&quot;3-band&quot;,&quot;tsType&quot;:&quot;'3-band' | 'mono'&quot;,&quot;section&quot;:&quot;Waveform&quot;}}">
+class Component extends DCLogic {
+  state = { playing: false, pos: 52.6, xf: 0.5, curve: 'power', loop: true, view: 'wave', mute: {}, solo: {} };
+  D = 222; BEAT = 60 / 124;
+  SECS = [[0,16,.5,0,.6,0,1],[16,48,.72,1,1,1,.7],[48,80,1,1,1,1,1],[80,96,.6,.3,0,.6,1],[96,128,.75,1,1,1,.7],[128,160,1,1,1,1,1],[160,176,.55,0,.8,.8,1],[176,208,1,1,1,1,1],[208,223,.55,.5,.6,0,1]];
+  canvases = {}; cbs = {}; cache = {};
+  ro = new ResizeObserver(es => es.forEach(e => this.draw(e.target)));
+
+  componentDidMount() {
+    this.onKey = e => {
+      if (/INPUT|TEXTAREA/.test(e.target.tagName)) return;
+      const k = e.key.toLowerCase();
+      if (k === ' ') { e.preventDefault(); this.togglePlay(); }
+      else if (k === 'a') this.setState({ xf: 0 });
+      else if (k === 'b') this.setState({ xf: 1 });
+      else if (k === 'c') this.setState({ xf: 0.5 });
+    };
+    window.addEventListener('keydown', this.onKey);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this.onKey); cancelAnimationFrame(this.raf); this.ro.disconnect(); }
+  componentDidUpdate() {
+    const key = this.state.view + '|' + this.stemCount() + '|' + this.origStyle();
+    if (key !== this.lastKey) { this.lastKey = key; Object.values(this.canvases).forEach(c => this.draw(c)); }
+  }
+  stemCount() { return Number(this.props.stemCount ?? 4) === 6 ? 6 : 4; }
+  origStyle() { return this.props.originalStyle ?? '3-band'; }
+  stemDefs() {
+    return this.stemCount() === 6
+      ? [{id:'drums',name:'Drums',ch:'Ch 1–2',hue:75},{id:'bass',name:'Bass',ch:'Ch 3–4',hue:285},{id:'guitar',name:'Guitar',ch:'Ch 5–6',hue:155},{id:'piano',name:'Piano',ch:'Ch 7–8',hue:205},{id:'other6',name:'Other',ch:'Ch 9–10',hue:335},{id:'vocals',name:'Vocals',ch:'Ch 11–12',hue:25}]
+      : [{id:'drums',name:'Drums',ch:'Ch 1–2',hue:75},{id:'bass',name:'Bass',ch:'Ch 3–4',hue:285},{id:'other',name:'Other',ch:'Ch 5–6',hue:155},{id:'vocals',name:'Vocals',ch:'Ch 7–8',hue:25}];
+  }
+
+  // ---- synthetic audio model ----
+  hash(n) { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); }
+  vn(x) { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return this.hash(i) * (1 - u) + this.hash(i + 1) * u; }
+  parts(t) {
+    const B = this.BEAT; let s = this.SECS[this.SECS.length - 1];
+    for (const x of this.SECS) if (t < x[1]) { s = x; break; }
+    const E = s[2] * Math.min(1, t / 1.5) * Math.min(1, Math.max(0, (222 - t) / 14));
+    const ph = (t % B) / B, dr = s[3] * E;
+    const kick = Math.exp(-ph * 7) * dr * 0.95;
+    const hat = Math.exp(-(((t + B / 2) % B) / B) * 10) * dr * 0.45;
+    const sn = Math.exp(-((((t - B) % (2 * B)) + 2 * B) % (2 * B)) / B * 8) * dr * 0.7;
+    const bass = s[4] * E * (0.45 + 0.3 * Math.pow(1 - ph, 1.5) + 0.1 * this.vn(t * 3));
+    const lp = (t % (B * 8)) / (B * 8);
+    const gate = lp < 0.8 ? Math.min(1, lp * 30, (0.8 - lp) * 30) : 0;
+    const vox = s[5] * E * gate * (0.5 + 0.5 * Math.abs(Math.sin(t * 9.3 + 3 * this.vn(t * 2)))) * (0.65 + 0.35 * this.vn(t * 0.7 + 5));
+    const pad = s[6] * E * (0.3 + 0.25 * this.vn(t * 0.4 + 9) + 0.08 * this.vn(t * 6));
+    const gtr = s[6] * E * (t > 16 ? 1 : 0.3) * (0.25 + 0.35 * Math.abs(Math.sin(t * Math.PI / B * 2))) * (0.7 + 0.3 * this.vn(t + 20));
+    const pno = s[6] * E * (0.15 + 0.6 * Math.exp(-((t % (2 * B)) / (2 * B)) * 3)) * (0.8 + 0.2 * this.vn(t * 2 + 40));
+    return { t, kick, hat, sn, bass, vox, pad, gtr, pno };
+  }
+  stemAmp(id, p) {
+    switch (id) {
+      case 'drums': return Math.min(1, Math.max(p.kick, p.sn, p.hat) + 0.05 * this.hash(Math.floor(p.t * 50)));
+      case 'bass': return p.bass;
+      case 'vocals': return p.vox;
+      case 'other': return Math.min(1, Math.max(p.pad, p.gtr * 0.9, p.pno * 0.9));
+      case 'other6': return p.pad;
+      case 'guitar': return p.gtr;
+      case 'piano': return p.pno;
+    }
+    return 0;
+  }
+  origAmp(p, ch) {
+    const g = ch ? 0.7 : 1, n = ch ? 1 : 0.7;
+    const v = Math.sqrt(p.kick ** 2 + p.sn ** 2 + 0.5 * p.hat ** 2 + p.bass ** 2 + p.vox ** 2 + 0.6 * p.pad ** 2 + (g * p.gtr) ** 2 + (n * p.pno) ** 2);
+    return Math.tanh(v * 1.1);
+  }
+  specE(id, p, f) {
+    const g = (c, w) => Math.exp(-Math.pow((f - c) / w, 2));
+    const harm = (f0, n, w, d) => { let s = 0; for (let k = 1; k <= n; k++) s += g(f0 + Math.log2(k) * 0.11, w) / Math.pow(k, d); return s; };
+    switch (id) {
+      case 'drums': return p.kick * (1.2 * g(.06, .05) + .15 * g(.2, .1)) + p.sn * (.5 * g(.45, .2) + .25 * g(.18, .04)) + (f > .62 ? p.hat * .8 * (.6 + .4 * this.hash(Math.floor(f * 300) + Math.floor(p.t * 30))) : 0);
+      case 'bass': return p.bass * (1.3 * g(p.bc, .018) + .6 * g(p.bc + .11, .015) + .25 * g(p.bc + .175, .012));
+      case 'vocals': return p.vox * (1.2 * harm(p.f0, 8, .007, .5) + (f > .75 ? .12 : 0));
+      case 'other6': return p.pad * (.7 * (g(.29, .01) + g(.33, .01) + g(.36, .01) + g(.41, .01)) + .25 * g(.45, .18));
+      case 'guitar': return p.gtr * harm(.27, 6, .009, .7);
+      case 'piano': return p.pno * (harm(.31, 4, .008, .8) + .8 * g(.35, .008) + .7 * g(.385, .008));
+      case 'other': return this.specE('other6', p, f) + this.specE('guitar', p, f) + this.specE('piano', p, f);
+      case 'origL': case 'origR': return ['drums', 'bass', 'vocals', 'other6', 'guitar', 'piano'].reduce((a, k) => a + this.specE(k, p, f), 0);
+    }
+    return 0;
+  }
+  cmap(v) {
+    const S = [[0,[18,18,22]],[.25,[52,24,96]],[.5,[150,40,112]],[.72,[235,95,60]],[.9,[250,190,90]],[1,[255,246,214]]];
+    for (let i = 1; i < S.length; i++) if (v <= S[i][0]) { const a = S[i - 1], b = S[i], u = (v - a[0]) / (b[0] - a[0]); return [0, 1, 2].map(j => a[1][j] + (b[1][j] - a[1][j]) * u); }
+    return S[S.length - 1][1];
+  }
+
+  // ---- drawing ----
+  refFor(id) {
+    return this.cbs[id] || (this.cbs[id] = el => {
+      const prev = this.canvases[id];
+      if (prev && prev !== el) this.ro.unobserve(prev);
+      if (el) { el.dataset.lane = id; this.canvases[id] = el; this.ro.observe(el); } else delete this.canvases[id];
+    });
+  }
+  draw(el) {
+    const id = el.dataset.lane, w = el.clientWidth, h = el.clientHeight;
+    if (!w || !h) return;
+    const dpr = window.devicePixelRatio || 1;
+    el.width = Math.round(w * dpr); el.height = Math.round(h * dpr);
+    const ctx = el.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#161616'; ctx.fillRect(0, 0, w, h);
+    if (this.state.view === 'spec') return this.drawSpec(ctx, id, w, h);
+    const D = this.D, mid = h / 2, H = h / 2 * 0.9, isOrig = id.startsWith('orig'), ch = id === 'origR' ? 1 : 0;
+    const cols = [];
+    for (let x = 0; x < w; x++) {
+      let a = 0, lo = 0, mi = 0, hi = 0;
+      for (let s = 0; s < 3; s++) {
+        const p = this.parts((x + (s + 0.5) / 3) / w * D);
+        if (isOrig) {
+          a = Math.max(a, this.origAmp(p, ch));
+          lo = Math.max(lo, Math.max(p.kick, p.bass * 0.9));
+          mi = Math.max(mi, Math.min(1, Math.sqrt(p.vox ** 2 + p.pad ** 2 + 0.6 * p.gtr ** 2 + 0.6 * p.pno ** 2 + 0.5 * p.sn ** 2)));
+          hi = Math.max(hi, Math.max(p.hat, p.sn * 0.6) + 0.15 * p.vox);
+        } else a = Math.max(a, this.stemAmp(id, p));
+      }
+      cols.push({ a, lo, mi, hi });
+    }
+    const pass = (color, key, k) => { ctx.fillStyle = color; cols.forEach((c, x) => { const v = Math.min(1, c[key] * k) * H; ctx.fillRect(x, mid - v, 1, v * 2); }); };
+    if (isOrig && this.origStyle() === '3-band') {
+      pass('oklch(0.58 0.15 255)', 'lo', 1); pass('oklch(0.78 0.13 65)', 'mi', 0.8); pass('#f0f0f0', 'hi', 0.55);
+    } else if (isOrig) {
+      pass('#60CDFF', 'a', 1); pass('rgba(255,255,255,0.4)', 'a', 0.55);
+    } else {
+      const hue = (this.stemDefs().find(s => s.id === id) || { hue: 0 }).hue;
+      pass(`oklch(0.74 0.14 ${hue})`, 'a', 1); pass('rgba(255,255,255,0.35)', 'a', 0.55);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(0, Math.floor(mid), w, 1);
+  }
+  drawSpec(ctx, id, w, h) {
+    const cols = Math.min(Math.round(w), 520), rows = 112, key = id + '|' + cols + '|' + this.stemCount();
+    let off = this.cache[key];
+    if (!off) {
+      off = document.createElement('canvas'); off.width = cols; off.height = rows;
+      const oc = off.getContext('2d'), img = oc.createImageData(cols, rows), B = this.BEAT;
+      for (let x = 0; x < cols; x++) {
+        const t = (x + 0.5) / cols * this.D, p = this.parts(t);
+        p.bc = 0.1 + 0.018 * Math.floor(this.hash(Math.floor(t / (B * 4))) * 4);
+        p.f0 = 0.34 + 0.05 * this.vn(t * 1.2) + 0.01 * Math.floor(this.hash(Math.floor(t / B)) * 3);
+        if (id === 'origR') { p.gtr *= 0.7; }
+        if (id === 'origL') { p.pno *= 0.7; }
+        for (let y = 0; y < rows; y++) {
+          const f = 1 - (y + 0.5) / rows;
+          const e = this.specE(id, p, f) * (1 - f * 0.35);
+          const v = Math.min(1, 1 - Math.exp(-e * 1.6) + 0.05 * this.hash(x * 131 + y * 7));
+          const c = this.cmap(v), i = (y * cols + x) * 4;
+          img.data[i] = c[0]; img.data[i + 1] = c[1]; img.data[i + 2] = c[2]; img.data[i + 3] = 255;
+        }
+      }
+      oc.putImageData(img, 0, 0); this.cache[key] = off;
+    }
+    ctx.imageSmoothingEnabled = true; ctx.drawImage(off, 0, 0, w, h);
+  }
+
+  // ---- transport ----
+  togglePlay = () => {
+    if (this.state.playing) { this.setState({ playing: false }); cancelAnimationFrame(this.raf); return; }
+    this.last = performance.now();
+    this.setState({ playing: true, pos: this.state.pos >= this.D ? 0 : this.state.pos });
+    const tick = now => {
+      if (!this.state.playing) return;
+      const dt = (now - this.last) / 1000; this.last = now;
+      let p = this.state.pos + dt;
+      if (p >= this.D) { if (this.state.loop) p = 0; else { this.setState({ pos: this.D, playing: false }); return; } }
+      this.setState({ pos: p });
+      this.raf = requestAnimationFrame(tick);
+    };
+    this.raf = requestAnimationFrame(tick);
+  };
+  xfFrom(e) {
+    const r = this.xfRect; let x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    if (Math.abs(x - 0.5) < 0.015) x = 0.5;
+    this.setState({ xf: x });
+  }
+  fmt(t) { const m = Math.floor(t / 60), s = t - m * 60; return String(m).padStart(2, '0') + ':' + s.toFixed(1).padStart(4, '0'); }
+  db(g) { if (g <= 0.0001) return '−∞ dB'; const d = 20 * Math.log10(g); return (Math.abs(d) < 0.05 ? '0.0' : (d < 0 ? '−' : '+') + Math.abs(d).toFixed(1)) + ' dB'; }
+
+  renderVals() {
+    const s = this.state, D = this.D, x = s.xf;
+    const gA = s.curve === 'linear' ? 1 - x : Math.cos(x * Math.PI / 2);
+    const gB = s.curve === 'linear' ? x : Math.sin(x * Math.PI / 2);
+    const p = this.parts(s.pos), live = s.playing ? 1 : 0;
+    const pct = v => Math.max(0, Math.min(100, v * 100)).toFixed(1) + '%';
+    const defs = this.stemDefs(), anySolo = defs.some(d => s.solo[d.id]);
+    let bSq = 0;
+    const stems = defs.map(d => {
+      const muted = !!s.mute[d.id], solo = !!s.solo[d.id];
+      const aud = anySolo ? solo : !muted;
+      const amp = this.stemAmp(d.id, p);
+      if (aud) bSq += amp * amp;
+      return {
+        ...d, color: `oklch(0.74 0.14 ${d.hue})`, ref: this.refFor(d.id),
+        toggleMute: () => this.setState(st => ({ mute: { ...st.mute, [d.id]: !st.mute[d.id] } })),
+        toggleSolo: () => this.setState(st => ({ solo: { ...st.solo, [d.id]: !st.solo[d.id] } })),
+        mBg: muted ? 'oklch(0.66 0.19 25)' : '#2d2d2d', mColor: muted ? '#000' : '#c5c5c5', mBorder: muted ? 'oklch(0.66 0.19 25)' : '#3a3a3a',
+        sBg: solo ? 'oklch(0.86 0.15 95)' : '#2d2d2d', sColor: solo ? '#000' : '#c5c5c5', sBorder: solo ? 'oklch(0.86 0.15 95)' : '#3a3a3a',
+        laneOpacity: aud ? 1 : 0.3,
+        level: pct(aud ? amp * gB * live : 0)
+      };
+    });
+    const aL = this.origAmp(p, 0) * gA * live, aR = this.origAmp(p, 1) * gA * live;
+    const bLv = Math.tanh(Math.sqrt(bSq) * 1.1) * gB * live;
+    const seg = on => on ? ['#3d3d3d', '#ffffff'] : ['transparent', '#c5c5c5'];
+    const [waveBg, waveColor] = seg(s.view === 'wave'), [specBg, specColor] = seg(s.view === 'spec');
+    const [linBg, linColor] = seg(s.curve === 'linear'), [powBg, powColor] = seg(s.curve === 'power');
+    const snapSty = on => on ? ['#60CDFF', '#000', '#60CDFF'] : ['#2d2d2d', '#fff', '#383838'];
+    const [aBg, aColor, aBorder] = snapSty(x === 0), [bBg, bColor, bBorder] = snapSty(x === 1);
+    const [loopBg, loopColor, loopBorder] = s.loop ? ['#3d3d3d', '#60CDFF', '#4a4a4a'] : ['#2d2d2d', '#fff', '#383838'];
+    return {
+      stems, stemChip: `${defs.length * 2} ch · ${defs.length} stems`,
+      origLanes: [
+        { id: 'origL', name: 'Left', ch: 'Ch 1', ref: this.refFor('origL'), level: pct(aL) },
+        { id: 'origR', name: 'Right', ch: 'Ch 2', ref: this.refFor('origR'), level: pct(aR) }
+      ],
+      ticks: [0, 30, 60, 90, 120, 150, 180, 210].map(t => ({ left: (t / D * 100) + '%', label: Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0') })),
+      phLeft: `calc(176px + (100% - 176px) * ${s.pos / D})`, playedPct: (s.pos / D * 100) + '%',
+      timeStr: this.fmt(s.pos), playing: s.playing, paused: !s.playing,
+      gAdb: this.db(gA), gBdb: this.db(gB), xfPct: (x * 100) + '%',
+      mAL: pct(aL), mAR: pct(aR * 0.96), mBL: pct(bLv), mBR: pct(bLv * 0.94),
+      waveBg, waveColor, specBg, specColor, linBg, linColor, powBg, powColor,
+      aBg, aColor, aBorder, bBg, bColor, bBorder, loopBg, loopColor, loopBorder,
+      setWave: () => this.setState({ view: 'wave' }), setSpec: () => this.setState({ view: 'spec' }),
+      setLinear: () => this.setState({ curve: 'linear' }), setPower: () => this.setState({ curve: 'power' }),
+      togglePlay: this.togglePlay,
+      stop: () => { cancelAnimationFrame(this.raf); this.setState({ playing: false, pos: 0 }); },
+      toggleLoop: () => this.setState(st => ({ loop: !st.loop })),
+      snapA: () => this.setState({ xf: 0 }), snapB: () => this.setState({ xf: 1 }), snapC: () => this.setState({ xf: 0.5 }),
+      seek: e => { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pos: Math.max(0, Math.min(D, (e.clientX - r.left) / r.width * D)) }); },
+      xfDown: e => { e.currentTarget.setPointerCapture(e.pointerId); this.xfRect = e.currentTarget.getBoundingClientRect(); this.dragging = true; this.xfFrom(e); },
+      xfMove: e => { if (this.dragging) this.xfFrom(e); },
+      xfUp: () => { this.dragging = false; }
+    };
+  }
+}
+</script>
+</body>
+</html>
