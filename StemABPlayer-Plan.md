@@ -125,9 +125,21 @@ Original (A) is any common file (WAV/FLAC/MP3/M4A) decoded to float32 stereo.
 
 ## Build phases
 1. **Scaffold** `StemABPlayer.sln` (WinUI 3 app + Audio + Render libs + tests). Confirm the app launches with
-   the dark Fluent shell and a WASAPI device enumerates.
-2. **Audio engine first (zero-lag spine):** WASAPI event-driven output, load+decode+resample one stereo file to
-   RAM, play/pause/seek/loop sample-accurate, master gain + limiter. Verify glitch-free, measure latency.
+   the dark Fluent shell and a WASAPI device enumerates. ✅ **Done** — commit `bc68afc`: .NET 8 pinned
+   (`global.json` 8.0.426), NAudio 2.2.1 device enumeration + passing test, Win2D 1.4.0 on WindowsAppSDK 2.5.1,
+   App converted to unpackaged .exe; dark shell + device list verified on real hardware.
+2. **Audio engine first (zero-lag spine).** Split into three checkpoints, each sized to fit roughly one ~5-hour
+   Pro usage window and to end on a clean commit:
+   - **2a — Decode to RAM.** Load + decode + resample one stereo file to float32 at the device rate, fully in
+     memory. WAV via NAudio's managed reader; **AAC / M4A via Windows Media Foundation** (`MediaFoundationReader`)
+     — never ffmpeg. Build the waveform peak-cache stub. Headless unit tests on a short fixture (sample count,
+     sample rate, channel layout). Inspect a real `.stem.m4a` track structure here (NI/Traktor multi-track MP4 vs
+     the plan's multichannel `.stem.wav` assumption — see *Input formats*).
+   - **2b — WASAPI output + transport.** Event-driven shared-mode output on a dedicated render thread pulling
+     from the RAM buffer; **play / pause / sample-accurate seek / sample-accurate loop** driven by a single
+     atomic `playheadSample`. No allocation and no locks on the render path.
+   - **2c — Master + verify.** Master gain and a soft limiter with click-free ramps; peak/RMS metering slots.
+     Verify glitch-free playback and **measure output latency on a local console session** (not RDP — see *Risks*).
 3. **Multi-source mix + A/B:** load A + the B stems aligned; A-bus / B-bus sum; crossfade (linear + equal-power);
    per-stem mute/solo with click-free ramps; metering slots.
 4. **Render pipeline:** waveform peak cache + Win2D lanes (3-band A, colored stems), playhead + click-to-seek,
