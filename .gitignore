@@ -30,3 +30,9 @@ TestResults/
 *.flac
 *.mp3
 *.m4a
+
+# CMake / vcpkg (C++/JUCE rebuild)
+build/
+out/
+vcpkg_installed/
+CMakeUserPresets.json
