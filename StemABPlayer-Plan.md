@@ -43,8 +43,8 @@ Segoe UI Variable), with the changes listed under *UI* below.
 | Target | Owns | Depends on |
 |---|---|---|
 | `StemAB_Decode` | One libav-based reader for both inputs: the Original (any FFmpeg format) and the 4 Stem streams of a Stem File (Embedded Master never decoded); r8brain resample → one A buffer + four Stem buffers (`juce::AudioBuffer<float>`, in RAM) | FFmpeg (avformat, avcodec), r8brain |
-| `StemAB_Engine` | Alignment (cross-correlation, polarity, offset + confidence, manual nudge; ADR 0003); transport (play / pause / seek / loop with fades, one atomic playhead); mix (A bus, B = audible Stems, Residual = A − all Stems; crossfade curves; mute/solo); Master Gain; Clip; peak/RMS meters; Track + Live Null Depth. No files, no GUI. | JUCE audio_basics, dsp |
-| `StemAB_Analysis` | Waveform min/max peak pyramid; A's 3-band (lo/mid/hi) energies; STFT spectrogram cache (log-freq, dB colour map, one shared scale across lanes) | JUCE dsp |
+| `StemAB_Engine` | Transport (play / pause / seek / loop with fades, one atomic playhead); mix (A bus, B = audible Stems, Residual = A − all Stems; crossfade curves; mute/solo); Master Gain; Clip; peak/RMS meters; Live Null Depth. Realtime only: no files, no GUI. | JUCE audio_basics, dsp |
+| `StemAB_Analysis` | Offline, on load: Alignment (cross-correlation, polarity, offset + confidence, manual nudge; ADR 0003) and Track Null Depth. Waveform min/max peak pyramid; A's 3-band (lo/mid/hi) energies; STFT spectrogram cache (log-freq, dB colour map, one shared scale across lanes) | JUCE dsp |
 | `StemAB_App` | GUI: LookAndFeel, lanes, ruler + loop drag, transport bar, crossfader + A/B/R, device selector, keyboard map, settings persistence | all of the above |
 | `StemAB_Tests` | Catch2 + CTest. Engine + Analysis on synthetic signals. Decode + alignment on the real test files (skipped if absent). | Decode, Engine, Analysis |
 

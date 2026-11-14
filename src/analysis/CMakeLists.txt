@@ -1,4 +1,6 @@
 add_library(StemAB_Analysis STATIC
+    Alignment.cpp
+    Alignment.h
     NullDepth.cpp
     NullDepth.h)
 

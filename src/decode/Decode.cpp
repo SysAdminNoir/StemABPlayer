@@ -83,8 +83,35 @@ namespace
 
     //==========================================================================
     /** Opens `file` and reads its stream info. FFmpeg on Windows takes UTF-8 paths. */
+    /** Routes libav* log output away from stderr. Errors go to juce::Logger; warnings and below are
+        debug-only (e.g. libavformat's "stream 0, timescale not set" for a Stem File's cover-art
+        picture stream, which mov_read_covr creates without a timescale — harmless). */
+    void ffmpegLogCallback (void* avcl, int level, const char* fmt, va_list args)
+    {
+        if (level > AV_LOG_WARNING)
+            return;
+
+        char line[1024];
+        int printPrefix = 1;
+        av_log_format_line2 (avcl, level, fmt, args, line, (int) sizeof (line), &printPrefix);
+        const auto message = juce::String ("[FFmpeg] ") + juce::String (line).trimEnd();
+
+        if (level <= AV_LOG_ERROR)
+            juce::Logger::writeToLog (message);
+        else
+            DBG (message);
+    }
+
+    void installFfmpegLogCallbackOnce()
+    {
+        static const bool installed = [] { av_log_set_callback (ffmpegLogCallback); return true; }();
+        juce::ignoreUnused (installed);
+    }
+
     bool openFile (const juce::File& file, FormatPtr& format, juce::String& error)
     {
+        installFfmpegLogCallbackOnce();
+
         if (! file.existsAsFile())
         {
             error = "File not found: " + file.getFullPathName();

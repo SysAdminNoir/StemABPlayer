@@ -4,7 +4,8 @@ add_executable(StemAB_Tests
     CrossfadeTests.cpp
     DecodeTests.cpp
     ResampleTests.cpp
-    AnalysisTests.cpp)
+    AnalysisTests.cpp
+    AlignmentTests.cpp)
 
 # StemAB_JuceModules compiles the JUCE module implementations into this exe (once); the static libs
 # only see JUCE headers. StemAB_Decode brings FFmpeg, whose DLLs vcpkg's applocal step copies beside
