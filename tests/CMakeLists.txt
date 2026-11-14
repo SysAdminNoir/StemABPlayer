@@ -3,6 +3,7 @@ include(Catch)   # from ${catch2_SOURCE_DIR}/extras (added to CMAKE_MODULE_PATH 
 add_executable(StemAB_Tests
     CrossfadeTests.cpp
     DecodeTests.cpp
+    ResampleTests.cpp
     AnalysisTests.cpp)
 
 # StemAB_JuceModules compiles the JUCE module implementations into this exe (once); the static libs
@@ -14,6 +15,9 @@ target_link_libraries(StemAB_Tests PRIVATE
     StemAB_Decode
     StemAB_JuceModules
     Catch2::Catch2WithMain)
+
+# Real-file tests look for "Audio Files/" and "Stem Files/" under this folder and SKIP when they are absent.
+target_compile_definitions(StemAB_Tests PRIVATE STEMAB_TEST_DATA_DIR="${PROJECT_SOURCE_DIR}")
 
 # PRE_TEST discovery: test names are listed when ctest runs, not as a post-build step of the exe, so
 # discovery cannot race the DLL copy.

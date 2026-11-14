@@ -30,7 +30,16 @@ FetchContent_Declare(Catch2
     GIT_TAG        v3.16.1
     GIT_SHALLOW    TRUE)
 
-FetchContent_MakeAvailable(JUCE Catch2)
+# r8brain-free-src (MIT) - offline high-quality resampler (ADR 0004: used identically on A and B). It has no
+# CMakeLists of its own, so we only fetch the sources (SOURCE_SUBDIR points at a non-existent folder so that
+# MakeAvailable does not try add_subdirectory) and compile them in src/decode.
+FetchContent_Declare(r8brain
+    GIT_REPOSITORY https://github.com/avaneev/r8brain-free-src.git
+    GIT_TAG        version-6.5
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  no-cmake-project)
+
+FetchContent_MakeAvailable(JUCE Catch2 r8brain)
 
 include(CTest)
 enable_testing()
