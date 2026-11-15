@@ -31,6 +31,10 @@ class MainComponent final : public juce::Component,
                             private juce::Timer
 {
 public:
+    /** Smallest client-area size at which every section fits without clipping (see layout in resized()). */
+    static constexpr int minimumWidth = 960;
+    static constexpr int minimumHeight = 720;
+
     MainComponent();
     ~MainComponent() override;
 
@@ -113,6 +117,10 @@ private:
     juce::TextButton aButton { "A" }, bButton { "B" }, rButton { "R" }, curveButton { "Equal power" };
     juce::Slider crossfadeSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::Label liveNullLabel;
+    juce::Label residualHelpLabel;      // caption explaining the R button, shown in the controls box
+    juce::Rectangle<int> controlsBox;   // bounds of the R / curve / Live Null box (set in resized(), drawn in paint())
+    juce::Rectangle<int> stemsBox;      // matching box around the four stem rows
+    juce::Rectangle<int> centreLine;    // the 50% / A|B boundary hairline (set in resized(), drawn in paint())
 
     std::array<StemRow, Session::numStems> stemRows;
 

@@ -43,6 +43,32 @@ namespace
         b.setColour (juce::TextButton::buttonOnColourId, on);
         b.setColour (juce::TextButton::textColourOnId, juce::Colour (theme::windowArgb));
     }
+
+    /** Layout metrics. Gaps come from one spacing scale (4 / 8 / 12 / 16 / 24); heights are fixed per row type. */
+    namespace layout
+    {
+        constexpr int s1 = 4, s2 = 8, s3 = 12, s4 = 16, s5 = 24;   // spacing scale
+        constexpr int margin = s4;          // window edge
+        constexpr int sectionGap = s5;      // between sections (a separator is centred in it)
+        constexpr int gutter = s3;          // each side of the 50% centre line
+
+        constexpr int buttonsH = 32, statusH = 150, deviceH = 40, transportH = 36;
+        constexpr int mixH = 36;            // crossfade slider row
+        constexpr int abH = 44;             // A / B meters: the primary content, so the tallest meters
+        constexpr int outH = 28, masterH = 30;   // tertiary: quieter, shorter
+
+        constexpr int boxPadX = s3, boxPadY = 10;   // inside the controls / stems boxes
+        constexpr int stemGap = 6;
+        constexpr int rowMin = 32, rowMax = 36;     // stem / control row height range
+        constexpr int bandMinH = 4 * rowMin + 3 * stemGap + 2 * boxPadY;   // 166
+        constexpr int bandMaxH = 4 * rowMax + 3 * stemGap + 2 * boxPadY;   // 182
+
+        // Everything resized() stacks at the smallest band height.
+        constexpr int requiredHeight = 2 * margin + buttonsH + s2 + statusH + deviceH + sectionGap + transportH
+                                     + sectionGap + mixH + s2 + abH + s3 + bandMinH + sectionGap + outH + s2 + masterH;
+        static_assert (requiredHeight <= MainComponent::minimumHeight,
+                       "MainComponent::minimumHeight is too small for the stacked layout");
+    }
 }
 
 //==============================================================================
@@ -148,13 +174,24 @@ MainComponent::MainComponent()
     };
     engine.setCurve (Curve::EqualPower);
 
+    // Type scale: 13 caption / 15 body + readouts / 18 primary (A, B). Labels have no inset so left edges align.
     liveNullLabel.setFont (juce::Font (juce::FontOptions (15.0f)));
+    liveNullLabel.setBorderSize (juce::BorderSize<int> (0));
+
+    residualHelpLabel.setText (juce::String (juce::CharPointer_UTF8 ("R = Residual (A \xe2\x88\x92 all stems)")),
+                               juce::dontSendNotification);
+    residualHelpLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
+    residualHelpLabel.setBorderSize (juce::BorderSize<int> (0));
+    residualHelpLabel.setJustificationType (juce::Justification::centredLeft);
+    residualHelpLabel.setMinimumHorizontalScale (1.0f);
+    residualHelpLabel.setColour (juce::Label::textColourId, dimText);
 
     // Stems
     for (int i = 0; i < Session::numStems; ++i)
     {
         auto& row = stemRows[(size_t) i];
         row.name.setText (stemName ((Stem) i), juce::dontSendNotification);
+        row.name.setBorderSize (juce::BorderSize<int> (0));
         styleToggle (row.mute, muteCol);
         styleToggle (row.solo, soloCol);
         row.mute.onClick = [this, i] { toggleStemMute (i); };
@@ -170,7 +207,12 @@ MainComponent::MainComponent()
     for (int m = 0; m < 3; ++m)
     {
         meterLabels[m].setText (meterNames[m], juce::dontSendNotification);
-        meterLabels[m].setJustificationType (juce::Justification::centredRight);
+        meterLabels[m].setJustificationType (juce::Justification::centredLeft);   // left edge aligns with the boxes
+        meterLabels[m].setBorderSize (juce::BorderSize<int> (0));
+        if (m < 2)      // A and B are the primary compare: larger, bold, full-contrast text
+            meterLabels[m].setFont (juce::Font (juce::FontOptions (18.0f).withStyle ("Bold")));
+        else            // Out is tertiary: body size, dimmed
+            meterLabels[m].setColour (juce::Label::textColourId, dimText);
         addAndMakeVisible (meterLabels[m]);
         addAndMakeVisible (meters[m][0]);
         addAndMakeVisible (meters[m][1]);
@@ -182,6 +224,8 @@ MainComponent::MainComponent()
     clipLabel.setColour (juce::Label::outlineColourId, juce::Colour (theme::outlineArgb));
 
     masterLabel.setText ("Master Gain", juce::dontSendNotification);
+    masterLabel.setBorderSize (juce::BorderSize<int> (0));
+    masterLabel.setColour (juce::Label::textColourId, dimText);
     masterSlider.setRange (masterInfDb, 0.0, 0.1);
     masterSlider.setValue (0.0, juce::dontSendNotification);
     masterSlider.setDoubleClickReturnValue (true, 0.0);
@@ -199,7 +243,7 @@ MainComponent::MainComponent()
     for (auto* c : std::initializer_list<juce::Component*> {
              &openOriginalButton, &openStemButton, &settingsButton, &statusLabel, &deviceLabel,
              &playButton, &loopButton, &positionSlider, &timeLabel,
-             &aButton, &crossfadeSlider, &bButton, &rButton, &curveButton, &liveNullLabel,
+             &aButton, &crossfadeSlider, &bButton, &rButton, &curveButton, &liveNullLabel, &residualHelpLabel,
              &clipLabel, &masterLabel, &masterSlider })
         addAndMakeVisible (c);
 
@@ -235,83 +279,138 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (theme::windowArgb));
 
-    // Section separators.
+    // Section separators, each centred in its 24 px gap: above the transport, above the crossfade + A/B
+    // section, and above the Out meter + Master Gain section.
     g.setColour (juce::Colour (theme::outlineArgb));
-    for (int y : { positionSlider.getY() - 10, crossfadeSlider.getY() - 10, stemRows[0].name.getY() - 10 })
-        g.drawHorizontalLine (y, 16.0f, (float) getWidth() - 16.0f);
+    for (int y : { positionSlider.getY(), crossfadeSlider.getY(), meterLabels[2].getY() })
+        g.drawHorizontalLine (y - layout::sectionGap / 2, (float) layout::margin, (float) (getWidth() - layout::margin));
+
+    // Matching subtle boxes group the secondary controls: R / curve / Live Null (left) and the stems (right).
+    for (const auto& box : { controlsBox, stemsBox })
+        if (! box.isEmpty())
+            g.drawRoundedRectangle (box.toFloat().reduced (0.5f), 6.0f, 1.0f);
+
+    // 50% centre line: the crossfade slider's midpoint, the A|B meter divider and the gutter between the two
+    // boxes all sit on it. Children paint on top, so the thumb covers it at 50% and the track crosses it
+    // elsewhere. dimText at 65% gives ~3:1 against the window background (non-text UI contrast).
+    if (! centreLine.isEmpty())
+    {
+        g.setColour (juce::Colour (theme::dimTextArgb).withAlpha (0.65f));
+        g.fillRect (centreLine);
+    }
 }
 
 void MainComponent::resized()
 {
-    auto area = getLocalBounds().reduced (16);
+    using namespace layout;
 
-    auto top = area.removeFromTop (32);
-    openOriginalButton.setBounds (top.removeFromLeft (150));
-    top.removeFromLeft (8);
-    openStemButton.setBounds (top.removeFromLeft (150));
-    settingsButton.setBounds (top.removeFromRight (150));
+    auto area = getLocalBounds().reduced (margin);
 
-    area.removeFromTop (8);
-    statusLabel.setBounds (area.removeFromTop (150));
-    deviceLabel.setBounds (area.removeFromTop (40));
-    area.removeFromTop (20);
-
-    auto transport = area.removeFromTop (36);
-    playButton.setBounds (transport.removeFromLeft (90));
-    transport.removeFromLeft (8);
-    loopButton.setBounds (transport.removeFromLeft (70));
-    transport.removeFromLeft (8);
-    timeLabel.setBounds (transport.removeFromRight (190));
-    positionSlider.setBounds (transport.reduced (4, 0));
-
-    area.removeFromTop (20);
-    auto mix = area.removeFromTop (36);
-    aButton.setBounds (mix.removeFromLeft (44));
-    mix.removeFromLeft (8);
-    liveNullLabel.setBounds (mix.removeFromRight (220));
-    mix.removeFromRight (8);
-    curveButton.setBounds (mix.removeFromRight (110));
-    mix.removeFromRight (16);
-    rButton.setBounds (mix.removeFromRight (44));
-    mix.removeFromRight (8);
-    bButton.setBounds (mix.removeFromRight (44));
-    mix.removeFromRight (8);
-    crossfadeSlider.setBounds (mix);
-
-    area.removeFromTop (20);
-    auto lower = area;
-    auto left = lower.removeFromLeft (lower.getWidth() / 2).reduced (0, 0);
-    auto right = lower.withTrimmedLeft (24);
-
-    for (auto& row : stemRows)
+    // Lays out one meter strip (label + two stereo bars) inside r. The label's left edge is the strip's left edge.
+    auto layoutMeter = [this] (int m, juce::Rectangle<int> r)
     {
-        auto r = left.removeFromTop (28);
-        row.name.setBounds (r.removeFromLeft (80));
-        row.mute.setBounds (r.removeFromLeft (34).reduced (0, 2));
-        r.removeFromLeft (4);
-        row.solo.setBounds (r.removeFromLeft (34).reduced (0, 2));
-        r.removeFromLeft (10);
-        row.meter.setBounds (r.reduced (0, 7));
-        left.removeFromTop (6);
-    }
-
-    for (int m = 0; m < 3; ++m)
-    {
-        auto r = right.removeFromTop (30);
         meterLabels[m].setBounds (r.removeFromLeft (40));
-        r.removeFromLeft (8);
+        r.removeFromLeft (s2);
         auto bars = r.reduced (0, 3);
         meters[m][0].setBounds (bars.removeFromTop (bars.getHeight() / 2).withTrimmedBottom (1));
         meters[m][1].setBounds (bars.withTrimmedTop (1));
-        right.removeFromTop (6);
-    }
+    };
 
-    right.removeFromTop (8);
-    auto masterRow = right.removeFromTop (30);
+    // 1. Bottom block FIRST (Out meter + Master Gain), pulled from the bottom edge, so it stays pinned and
+    //    visible however little height is left: anything that runs short is the flexible band further up.
+    auto masterRow = area.removeFromBottom (masterH);
     clipLabel.setBounds (masterRow.removeFromRight (60));
-    masterRow.removeFromRight (12);
+    masterRow.removeFromRight (s3);
     masterLabel.setBounds (masterRow.removeFromLeft (90));
     masterSlider.setBounds (masterRow);
+
+    area.removeFromBottom (s2);
+    layoutMeter (2, area.removeFromBottom (outH));
+    area.removeFromBottom (sectionGap);      // the separator above the Out meter is centred in this gap
+
+    // 2. Fixed-height rows from the top.
+    auto top = area.removeFromTop (buttonsH);
+    openOriginalButton.setBounds (top.removeFromLeft (150));
+    top.removeFromLeft (s2);
+    openStemButton.setBounds (top.removeFromLeft (150));
+    settingsButton.setBounds (top.removeFromRight (150));
+
+    area.removeFromTop (s2);
+    statusLabel.setBounds (area.removeFromTop (statusH));
+    deviceLabel.setBounds (area.removeFromTop (deviceH));
+    area.removeFromTop (sectionGap);
+
+    auto transport = area.removeFromTop (transportH);
+    playButton.setBounds (transport.removeFromLeft (90));
+    transport.removeFromLeft (s2);
+    loopButton.setBounds (transport.removeFromLeft (70));
+    transport.removeFromLeft (s2);
+    timeLabel.setBounds (transport.removeFromRight (190));
+    positionSlider.setBounds (transport.reduced (s1, 0));
+
+    area.removeFromTop (sectionGap);
+
+    // Crossfade row: A and B buttons pinned to the ends, the slider between them. The two 44 px buttons and
+    // 8 px gaps are symmetric, so the slider's midpoint is the content centre.
+    auto mix = area.removeFromTop (mixH);
+    aButton.setBounds (mix.removeFromLeft (44));
+    mix.removeFromLeft (s2);
+    bButton.setBounds (mix.removeFromRight (44));
+    mix.removeFromRight (s2);
+    crossfadeSlider.setBounds (mix);
+
+    // A | B meters: exactly 50% each; the boundary is the content centre, with a gutter either side of it.
+    area.removeFromTop (s2);
+    auto abRow = area.removeFromTop (abH);
+    const int centreX = abRow.getX() + abRow.getWidth() / 2;    // == crossfade slider centre (to within 0.5 px)
+    auto aHalf = abRow.removeFromLeft (abRow.getWidth() / 2);
+    layoutMeter (0, aHalf.withTrimmedRight (gutter));
+    layoutMeter (1, abRow.withTrimmedLeft (gutter));
+
+    // 3. The flexible middle: the controls box (left) and the stems box (right) share one band that takes
+    //    whatever height remains (between bandMinH and bandMaxH). Rows scale with it; they never overlap the
+    //    bottom block because that was already removed from `area`.
+    area.removeFromTop (s3);
+    auto band = area.removeFromTop (juce::jlimit (0, bandMaxH, area.getHeight()));
+    auto bandLeft = band.removeFromLeft (band.getWidth() / 2);
+    controlsBox = bandLeft.withTrimmedRight (gutter);
+    stemsBox = band.withTrimmedLeft (gutter);
+
+    const int innerH = juce::jmax (0, band.getHeight() - 2 * boxPadY);
+    const int rowH = juce::jlimit (20, rowMax, (innerH - 3 * stemGap) / 4);
+    const auto rowAt = [rowH] (juce::Rectangle<int> inner, int k)
+    {
+        return juce::Rectangle<int> (inner.getX(), inner.getY() + k * (rowH + stemGap), inner.getWidth(), rowH)
+                   .getIntersection (inner);
+    };
+
+    // Controls box: R + curve on stem-row 0, caption on row 1, the Live Null readout anchored on row 3.
+    const auto boxInner = controlsBox.reduced (boxPadX, boxPadY);
+    auto controlsRow = rowAt (boxInner, 0);
+    rButton.setBounds (controlsRow.removeFromLeft (44));
+    controlsRow.removeFromLeft (s2);
+    curveButton.setBounds (controlsRow.removeFromLeft (110));
+    residualHelpLabel.setBounds (rowAt (boxInner, 1));
+    liveNullLabel.setBounds (rowAt (boxInner, 3));
+
+    // Stems box: name + Mute + Solo + meter per row.
+    const auto stemsInner = stemsBox.reduced (boxPadX, boxPadY);
+    for (int i = 0; i < Session::numStems; ++i)
+    {
+        auto& row = stemRows[(size_t) i];
+        auto r = rowAt (stemsInner, i);
+        row.name.setBounds (r.removeFromLeft (80));
+        row.mute.setBounds (r.removeFromLeft (36).reduced (0, 1));
+        r.removeFromLeft (s1);
+        row.solo.setBounds (r.removeFromLeft (36).reduced (0, 1));
+        r.removeFromLeft (s2);
+        row.meter.setBounds (r.reduced (0, rowH / 4));
+    }
+
+    // The 50% centre line: from just inside the crossfade row, down through the A|B meters and the gutter
+    // between the two boxes. 2 px wide so it is centred exactly on the pixel boundary at an even width.
+    const int lineTop = crossfadeSlider.getY() + s1;
+    centreLine = { centreX - 1, lineTop, 2, juce::jmax (0, controlsBox.getBottom() - lineTop) };
 }
 
 //==============================================================================

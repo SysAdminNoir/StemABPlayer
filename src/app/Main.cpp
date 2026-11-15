@@ -30,13 +30,20 @@ public:
                 content->loadPair (original, stems);
         }
         setResizable (true, true);
-        setResizeLimits (960, 600, 8192, 8192);
+
+        // The constrainer works on the whole window including the native title bar and borders, while the
+        // panel's minimum is a client-area size. Use a generous frame estimate now and the real frame once
+        // the native peer exists, so the client area can never drop below MainComponent's minimum.
+        applyMinimumSize (juce::BorderSize<int> (48, 8, 8, 8));
         centreWithSize (1280, 800);
         setVisible (true);
 
         // Needs the native peer, so it comes after the window is shown.
         if (auto* peer = getPeer())
+        {
             enableDarkTitleBar (peer->getNativeHandle());
+            applyMinimumSize (peer->getFrameSize());
+        }
     }
 
     void closeButtonPressed() override
@@ -45,6 +52,13 @@ public:
     }
 
 private:
+    void applyMinimumSize (const juce::BorderSize<int>& frame)
+    {
+        setResizeLimits (MainComponent::minimumWidth + frame.getLeftAndRight(),
+                         MainComponent::minimumHeight + frame.getTopAndBottom(),
+                         8192, 8192);
+    }
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
 };
 
