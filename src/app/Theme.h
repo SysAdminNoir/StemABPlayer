@@ -54,6 +54,10 @@ inline juce::Colour colour (juce::uint32 argb) noexcept     { return juce::Colou
 // by one interface scale (MainComponent::uiScale: 0.9 / 1.0 / 1.15 / 1.3).
 inline constexpr float baseFontPx = 14.0f;
 
+/** The interface-scale steps: the one list behind A- / A+, Ctrl+- / Ctrl+= / Ctrl+0 and Preferences. */
+inline constexpr std::array<float, 4> scaleSteps { 0.9f, 1.0f, 1.15f, 1.3f };
+inline constexpr int defaultScaleIndex = 1;     // 100 %
+
 inline int scaled (float px, float uiScale) noexcept         { return juce::roundToInt (px * uiScale); }
 inline float em (float ems, float uiScale) noexcept          { return baseFontPx * ems * uiScale; }
 
@@ -254,6 +258,40 @@ public:
             c = c.brighter (0.4f);
         g.setColour (c.withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f));
         g.drawFittedText (b.getButtonText(), b.getLocalBounds().reduced (4, 0), juce::Justification::centred, 1, 1.0f);
+    }
+
+    /** Check boxes (Preferences): a rounded box, blue with a dark tick when on. Property "fontPx" (double,
+        default 14) sets the text size, already scaled. */
+    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& b, bool highlighted, bool) override
+    {
+        const auto fontPx = (float) (double) b.getProperties().getWithDefault ("fontPx", 14.0);
+        const float alpha = b.isEnabled() ? 1.0f : 0.5f;
+        const float box = std::round (fontPx * 1.15f);
+        const auto r = b.getLocalBounds().toFloat();
+        const juce::Rectangle<float> tick (r.getX() + 1.0f, r.getCentreY() - box * 0.5f, box, box);
+        const bool on = b.getToggleState();
+        const float corner = juce::jmax (2.0f, box * 0.2f);
+
+        g.setColour (colour (on ? colourBArgb : raisedArgb).withMultipliedAlpha (alpha));
+        g.fillRoundedRectangle (tick, corner);
+        g.setColour (colour (on ? colourBArgb : (highlighted ? hoverBorderArgb : hairline2Argb)).withMultipliedAlpha (alpha));
+        g.drawRoundedRectangle (tick.reduced (0.5f), corner, 1.0f);
+
+        if (on)
+        {
+            juce::Path p;
+            p.startNewSubPath (tick.getX() + box * 0.24f, tick.getY() + box * 0.52f);
+            p.lineTo (tick.getX() + box * 0.43f, tick.getY() + box * 0.71f);
+            p.lineTo (tick.getX() + box * 0.77f, tick.getY() + box * 0.31f);
+            g.setColour (colour (groundArgb).withMultipliedAlpha (alpha));
+            g.strokePath (p, juce::PathStrokeType (juce::jmax (1.5f, box * 0.13f), juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+        }
+
+        g.setColour (colour (highlighted ? textArgb : buttonTextArgb).withMultipliedAlpha (alpha));
+        g.setFont (uiFont (fontPx));
+        g.drawFittedText (b.getButtonText(), r.withTrimmedLeft (box + fontPx * 0.6f).toNearestInt(),
+                          juce::Justification::centredLeft, 2, 1.0f);
     }
 
     int getSliderThumbRadius (juce::Slider& s) override

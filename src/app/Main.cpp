@@ -18,24 +18,18 @@ public:
                                 juce::DocumentWindow::allButtons)
     {
         setUsingNativeTitleBar (true);
-        auto* content = new MainComponent();
+        content = new MainComponent();
         setContentOwned (content, false);   // false: don't resize the window to the content
-
-        // Optional: "<original> <stem file>" on the command line loads that pair.
-        const auto args = juce::StringArray::fromTokens (commandLine, true);
-        if (args.size() == 2)
-        {
-            const juce::File original (args[0].unquoted()), stems (args[1].unquoted());
-            if (original.existsAsFile() && stems.existsAsFile())
-                content->loadPair (original, stems);
-        }
         setResizable (true, true);
 
         // The constrainer works on the whole window including the native title bar and borders, while the
         // panel's minimum is a client-area size. Use a generous frame estimate now and the real frame once
         // the native peer exists, so the client area can never drop below MainComponent's minimum.
         applyMinimumSize (juce::BorderSize<int> (48, 8, 8, 8));
-        centreWithSize (1280, 800);
+
+        // The last size / position (always remembered); the first run centres a 1280 x 800 window.
+        if (! restoreWindowStateFromString (content->getSettings().getWindowState()))
+            centreWithSize (1280, 800);
         setVisible (true);
 
         // Needs the native peer, so it comes after the window is shown.
@@ -44,6 +38,31 @@ public:
             enableDarkTitleBar (peer->getNativeHandle());
             applyMinimumSize (peer->getFrameSize());
         }
+
+        windowStateTracked = true;
+        saveWindowState();
+
+        // "<original> <stem file>" on the command line loads that pair; otherwise the last session (if that
+        // preference is on and its files still exist).
+        const auto args = juce::StringArray::fromTokens (commandLine, true);
+        bool loaded = false;
+        if (args.size() == 2)
+        {
+            const juce::File original (args[0].unquoted()), stems (args[1].unquoted());
+            if (original.existsAsFile() && stems.existsAsFile())
+            {
+                content->loadPair (original, stems);
+                loaded = true;
+            }
+        }
+        if (! loaded)
+            content->resumeLastSession();
+    }
+
+    ~MainWindow() override
+    {
+        saveWindowState();      // the content (and its settings) still exist here
+        windowStateTracked = false;
     }
 
     void closeButtonPressed() override
@@ -51,7 +70,29 @@ public:
         juce::JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // Size / position changes mark the settings dirty; the PropertiesFile writes them about a second later.
+    void moved() override
+    {
+        juce::DocumentWindow::moved();
+        saveWindowState();
+    }
+
+    void resized() override
+    {
+        juce::DocumentWindow::resized();
+        saveWindowState();
+    }
+
 private:
+    void saveWindowState()
+    {
+        if (windowStateTracked && content != nullptr)
+            content->getSettings().setWindowState (getWindowStateAsString());
+    }
+
+    MainComponent* content = nullptr;   // owned by the window
+    bool windowStateTracked = false;
+
     void applyMinimumSize (const juce::BorderSize<int>& frame)
     {
         setResizeLimits (MainComponent::minimumWidth + frame.getLeftAndRight(),

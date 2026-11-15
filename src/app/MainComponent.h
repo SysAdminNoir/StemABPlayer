@@ -5,13 +5,17 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 
+#include "AppSettings.h"
 #include "SessionLoader.h"
+#include "SessionState.h"
 #include "WaveformBuilder.h"
 #include "engine/PlaybackEngine.h"
 #include "ui/ControlDeck.h"
 #include "ui/HeaderBar.h"
 #include "ui/MeterBridge.h"
+#include "ui/PreferencesPanel.h"
 #include "ui/TrackArea.h"
 
 namespace stemab
@@ -24,7 +28,11 @@ namespace stemab
 
     Two kinds of resizing: the window is freely resizable (lanes grow, the track area scrolls when even the
     minimum lane height does not fit), and the interface scale (A- / A+, Ctrl+- / Ctrl+= / Ctrl+0) steps
-    90 / 100 / 115 / 130 %, multiplying every font size and metric through one uiScale factor. */
+    90 / 100 / 115 / 130 %, multiplying every font size and metric through one uiScale factor.
+
+    Settings (AppSettings, %APPDATA%/StemABPlayer/settings.xml): the interface scale, the Open-dialog folders,
+    the audio device setup and - with "Resume last session on launch" - the last pair, playhead and mix
+    settings (SessionState), saved at most about once a second while they change, and on shutdown. */
 class MainComponent final : public juce::Component,
                             private juce::ChangeListener,
                             private juce::Timer
@@ -43,6 +51,14 @@ public:
 
     /** Same as choosing both files in the dialogs (used for "Stem AB Player.exe <original> <stem file>"). */
     void loadPair (const juce::File& original, const juce::File& stems);
+
+    /** At launch, without files on the command line: if "Resume last session on launch" is on and the saved
+        pair still exists, applies the saved mix settings, loads the pair and (once A is playable) moves the
+        playhead to the saved position, paused. Returns false if nothing was resumed (a missing file is
+        reported in the header status). */
+    bool resumeLastSession();
+
+    AppSettings& getSettings() noexcept         { return settings; }
 
 private:
     /** The device callback: forwards to the engine and nothing else. */
@@ -75,7 +91,7 @@ private:
     void chooseOriginal();
     void chooseStemFile();
     void startLoadIfReady();
-    void showAudioSettings();
+    void showPreferences();
     void updateStatusText();
     void updateMixButtons();
     void pollSession();
@@ -91,10 +107,24 @@ private:
     void setScaleIndex (int index);
     float uiScale() const noexcept;
 
-    juce::File defaultFolder (const char* name) const;
+    /** The repo's "Audio Files" / "Stem Files" when present (next to the sources or above the exe), else the
+        user's Music folder. */
+    juce::File builtInFolder (AppSettings::Folder) const;
+    /** Where an Open dialog starts: the last-used folder (if that option is on), the folder chosen in
+        Preferences, or builtInFolder(). */
+    juce::File chooserFolder (AppSettings::Folder) const;
+
+    // Session resume / save (see SessionState)
+    std::optional<SessionState> captureSessionState() const;
+    void applySessionState (const SessionState&);
+    void saveSessionState (bool force);
+    void updateResumeSeek();
+    void cancelResume();
+    void saveDeviceState();
 
     // Destruction order matters (reverse of declaration): the waveform jobs and the loader go before the
-    // device, and the device before the engine.
+    // device, and the device before the engine. The settings go last (their destructor writes the file).
+    AppSettings settings;
     PlaybackEngine engine;
     juce::AudioDeviceManager deviceManager;
     EngineCallback engineCallback { engine };
@@ -102,10 +132,9 @@ private:
     WaveformBuilder waveforms;
     juce::String initialiseError;
 
-    juce::ApplicationProperties appProperties;
     juce::File originalFile, stemFile;
     std::unique_ptr<juce::FileChooser> chooser;
-    juce::Component::SafePointer<juce::DialogWindow> settingsDialog;
+    std::unique_ptr<PreferencesWindow> preferences;     // before the device's destruction (the selector listens to it)
     juce::TooltipWindow tooltips { nullptr, 600 };
 
     HeaderBar header;
@@ -121,6 +150,14 @@ private:
     bool lastClipShown = false;
     bool stemControlsEnabled = false;   // the playing session has Stems (B, R, Crossfade, Mute/Solo usable)
     bool focusInitialised = false;
+
+    // Resume: the saved playhead waits for the Original-only Session to be live (-1 = nothing pending).
+    juce::int64 resumeSeekTarget = -1;
+    int resumeSeekAttempts = 0;
+    bool resumeSeekIssued = false;
+    juce::String resumeNotice;                      // e.g. a saved file that no longer exists
+    std::optional<SessionState> lastSavedSession;
+    double lastSessionSaveMs = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

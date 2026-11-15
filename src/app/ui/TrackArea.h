@@ -42,6 +42,10 @@ public:
     void setOriginalSubLabel (const juce::String&);
     void setHint (const juce::String&);
 
+    /** The R lane's view gain: +24 dB (visible) or the true level. Display only (the audio is untouched). */
+    void setResidualAmplified (bool);
+    bool isResidualAmplified() const noexcept           { return residualAmplified; }
+
     /** Timer tick. */
     void update (juce::int64 playheadSample)            { overlay.update (playheadSample); }
 
@@ -65,7 +69,6 @@ private:
     int laneHeightFor (int viewportHeight) const;
     int contentHeightFor (int laneHeight) const;
     void updateStemPlaceholders();
-    void setResidualAmplified (bool);    // R lane display: +24 dB (visible) or true level
 
     float uiScale = 1.0f;
     bool residualAmplified = true;

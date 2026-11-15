@@ -9,7 +9,10 @@ add_executable(StemAB_Tests
     AnalysisTests.cpp
     AlignmentTests.cpp
     LoadTests.cpp
-    WaveformSummaryTests.cpp)
+    SessionStateTests.cpp
+    WaveformSummaryTests.cpp
+    # The resume-session value type lives with the app but needs only juce_core: tested here directly.
+    ${PROJECT_SOURCE_DIR}/src/app/SessionState.cpp)
 
 # StemAB_JuceModules compiles the JUCE module implementations into this exe (once); the static libs
 # only see JUCE headers. StemAB_Decode brings FFmpeg, whose DLLs vcpkg's applocal step copies beside

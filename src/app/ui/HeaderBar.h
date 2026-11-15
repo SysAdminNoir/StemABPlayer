@@ -5,7 +5,7 @@
 namespace stemab
 {
 
-/** The header bar: logo + "STEM A/B", the A and B file chips, the file / audio-settings buttons and the
+/** The header bar: logo + "STEM A/B", the A and B file chips, the file / Preferences buttons and the
     interface-scale buttons (row 1); a status line (row 2) - load progress, errors and notices on the left,
     Alignment Offset / Track Null Depth / rate / device on the right. The full detail is in the tooltip. */
 class HeaderBar final : public juce::Component,

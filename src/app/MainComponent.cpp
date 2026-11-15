@@ -20,8 +20,8 @@ namespace
     constexpr double masterMinDb = -60.0;
     constexpr double masterInfDb = -61.0;     // bottom of the fader = -inf
 
-    constexpr std::array<float, 4> scaleSteps { 0.9f, 1.0f, 1.15f, 1.3f };
-    constexpr int defaultScaleIndex = 1;
+    using theme::scaleSteps;
+    using theme::defaultScaleIndex;
     constexpr float bridgeWidthPx = 168.0f;
 
     const juce::String middleDot (juce::CharPointer_UTF8 ("\xc2\xb7"));
@@ -62,23 +62,17 @@ namespace
 //==============================================================================
 MainComponent::MainComponent()
 {
-    initialiseError = deviceManager.initialiseWithDefaultDevices (0, 2);
+    // The saved device setup (Preferences > Audio); a device that is gone falls back to the default one.
+    {
+        const auto savedDevice = settings.getAudioDeviceState();
+        initialiseError = deviceManager.initialise (0, 2, savedDevice.get(), true);
+    }
     deviceManager.addAudioCallback (&engineCallback);
     deviceManager.addChangeListener (this);
 
     loader.onStatusChanged = [this] { updateStatusText(); };
 
-    // Interface scale, remembered in %APPDATA%/StemABPlayer/settings.xml
-    {
-        juce::PropertiesFile::Options options;
-        options.applicationName = "settings";
-        options.filenameSuffix = ".xml";
-        options.folderName = "StemABPlayer";
-        options.osxLibrarySubFolder = "Application Support";
-        appProperties.setStorageParameters (options);
-        if (auto* props = appProperties.getUserSettings())
-            scaleIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, props->getIntValue ("uiScaleIndex", defaultScaleIndex));
-    }
+    scaleIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, settings.getScaleIndex (defaultScaleIndex));
 
     // Waveform summaries arrive on the message thread (stale ones are dropped by the builder).
     waveforms.onOriginalReady = [this] (WaveformBuilder::SummaryPtr s)
@@ -95,7 +89,7 @@ MainComponent::MainComponent()
     // Header
     header.openOriginalButton.onClick = [this] { chooseOriginal(); };
     header.openStemButton.onClick = [this] { chooseStemFile(); };
-    header.settingsButton.onClick = [this] { showAudioSettings(); };
+    header.settingsButton.onClick = [this] { showPreferences(); };
     header.scaleDownButton.onClick = [this] { setScaleIndex (scaleIndex - 1); };
     header.scaleUpButton.onClick = [this] { setScaleIndex (scaleIndex + 1); };
 
@@ -173,14 +167,15 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+    saveSessionState (true);    // the last position and mix settings (before anything is torn down)
     stopTimer();
 
-    if (settingsDialog != nullptr)
-        delete settingsDialog.getComponent();
+    preferences.reset();
 
     deviceManager.removeChangeListener (this);
     deviceManager.removeAudioCallback (&engineCallback);
     deviceManager.closeAudioDevice();
+    settings.save();
     // waveforms (cancels and joins its jobs) and loader (waits for its worker) are destroyed next.
 }
 
@@ -205,8 +200,13 @@ void MainComponent::setScaleIndex (int index)
     resized();
     repaint();
 
-    if (auto* props = appProperties.getUserSettings())
-        props->setValue ("uiScaleIndex", scaleIndex);
+    if (preferences != nullptr)
+    {
+        preferences->setUiScale (s);
+        preferences->getPanel().setScaleIndex (scaleIndex);
+    }
+
+    settings.setScaleIndex (scaleIndex);
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -228,8 +228,18 @@ void MainComponent::resized()
 //==============================================================================
 void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
 {
-    loader.deviceConfigurationChanged();
+    loader.deviceConfigurationChanged();    // the rate policy (a different device tries Native Rate again)
+    saveDeviceState();
     updateStatusText();
+}
+
+void MainComponent::saveDeviceState()
+{
+    if (const auto xml = deviceManager.createStateXml())   // null until a setup was chosen or restored
+    {
+        settings.setAudioDeviceState (xml.get());
+        settings.save();
+    }
 }
 
 void MainComponent::pollSession()
@@ -302,6 +312,7 @@ void MainComponent::timerCallback()
     }
 
     pollSession();
+    updateResumeSeek();
 
     // Transport
     deck.playButton.setPlaying (engine.isPlaying());
@@ -374,11 +385,14 @@ void MainComponent::timerCallback()
     bridge.setLiveNullDepth (live);
 
     updateStatusText();
+    saveSessionState (false);
 }
 
 //==============================================================================
-juce::File MainComponent::defaultFolder (const char* name) const
+juce::File MainComponent::builtInFolder (AppSettings::Folder folder) const
 {
+    const char* name = folder == AppSettings::Folder::originals ? "Audio Files" : "Stem Files";
+
     if (const juce::File src (juce::String (STEMAB_SOURCE_DIR)); src.isDirectory() && src.getChildFile (name).isDirectory())
         return src.getChildFile (name);
 
@@ -391,15 +405,29 @@ juce::File MainComponent::defaultFolder (const char* name) const
     return juce::File::getSpecialLocation (juce::File::userMusicDirectory);
 }
 
+juce::File MainComponent::chooserFolder (AppSettings::Folder folder) const
+{
+    if (settings.getRememberLastFolder())
+        if (const auto last = settings.getLastUsedFolder (folder); last.isDirectory())
+            return last;
+
+    if (const auto chosen = settings.getFolder (folder); chosen.isDirectory())
+        return chosen;
+
+    return builtInFolder (folder);
+}
+
 void MainComponent::chooseOriginal()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Open original (A)", defaultFolder ("Audio Files"),
+    chooser = std::make_unique<juce::FileChooser> ("Open original (A)", chooserFolder (AppSettings::Folder::originals),
                                                    "*.flac;*.wav;*.aif;*.aiff;*.mp3;*.m4a;*.ogg;*.opus");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [this] (const juce::FileChooser& fc)
                           {
                               if (const auto f = fc.getResult(); f.existsAsFile())
                               {
+                                  cancelResume();
+                                  settings.setLastUsedFolder (AppSettings::Folder::originals, f.getParentDirectory());
                                   originalFile = f;
                                   startLoadIfReady();
                                   updateStatusText();
@@ -409,13 +437,15 @@ void MainComponent::chooseOriginal()
 
 void MainComponent::chooseStemFile()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Open stem file (B)", defaultFolder ("Stem Files"),
+    chooser = std::make_unique<juce::FileChooser> ("Open stem file (B)", chooserFolder (AppSettings::Folder::stemFiles),
                                                    "*.stem.m4a;*.m4a;*.mp4");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [this] (const juce::FileChooser& fc)
                           {
                               if (const auto f = fc.getResult(); f.existsAsFile())
                               {
+                                  cancelResume();
+                                  settings.setLastUsedFolder (AppSettings::Folder::stemFiles, f.getParentDirectory());
                                   stemFile = f;
                                   startLoadIfReady();
                                   updateStatusText();
@@ -425,6 +455,7 @@ void MainComponent::chooseStemFile()
 
 void MainComponent::loadPair (const juce::File& original, const juce::File& stems)
 {
+    cancelResume();
     originalFile = original;
     stemFile = stems;
     startLoadIfReady();
@@ -437,30 +468,191 @@ void MainComponent::startLoadIfReady()
         loader.load (originalFile, stemFile);
 }
 
-void MainComponent::showAudioSettings()
+void MainComponent::showPreferences()
 {
-    if (settingsDialog != nullptr)
+    if (preferences == nullptr)
     {
-        settingsDialog->toFront (true);
+        PreferencesPanel::Callbacks callbacks;
+        callbacks.builtInFolder = [this] (AppSettings::Folder f) { return builtInFolder (f); };
+        callbacks.setScaleIndex = [this] (int index) { setScaleIndex (index); };
+
+        preferences = std::make_unique<PreferencesWindow> (settings, deviceManager, std::move (callbacks));
+        preferences->onClosed = [this]
+        {
+            if (isShowing())
+                grabKeyboardFocus();   // the shortcuts again
+        };
+        preferences->setUiScale (uiScale());
+        preferences->getPanel().setScaleIndex (scaleIndex);
+        preferences->centreAroundComponent (this, preferences->getWidth(), preferences->getHeight());
+    }
+
+    preferences->setVisible (true);
+    preferences->toFront (true);
+}
+
+//==============================================================================
+bool MainComponent::resumeLastSession()
+{
+    if (! settings.getResumeSession())
+        return false;
+
+    const auto saved = settings.getSession();
+    if (! saved.has_value())
+        return false;
+
+    const juce::File original (saved->originalPath), stems (saved->stemFilePath);
+    if (! original.existsAsFile() || ! stems.existsAsFile())
+    {
+        const auto& missing = original.existsAsFile() ? stems : original;
+        resumeNotice = "last session not resumed (" + missing.getFileName() + " not found)";
+        updateStatusText();
+        return false;
+    }
+
+    applySessionState (*saved);
+    loadPair (original, stems);     // (clears any earlier resume state)
+
+    // The playhead is on A's timeline: it is applied once the Original-only Session is live, and the Stems
+    // upgrade keeps the position (PlaybackEngine::upgradeSession). The transport stays paused.
+    resumeSeekTarget = saved->playheadSample > 0 ? saved->playheadSample : -1;
+    resumeSeekAttempts = 0;
+    resumeSeekIssued = false;
+    lastSavedSession = saved;       // nothing new to write until something changes
+    lastSessionSaveMs = juce::Time::getMillisecondCounterHiRes();
+    return true;
+}
+
+void MainComponent::cancelResume()
+{
+    resumeSeekTarget = -1;
+    resumeNotice.clear();
+}
+
+void MainComponent::updateResumeSeek()
+{
+    if (resumeSeekTarget < 0)
+        return;
+
+    const auto& st = loader.getStatus();
+    if (st.original == StageState::failed)
+    {
+        resumeSeekTarget = -1;
         return;
     }
 
-    auto selector = std::make_unique<juce::AudioDeviceSelectorComponent> (deviceManager,
-                                                                          0, 0,      // no inputs
-                                                                          0, 2,      // outputs
-                                                                          false, false,
-                                                                          true,      // stereo pairs
-                                                                          false);    // show advanced options
-    selector->setSize (640, 420);
+    // Wait until the audio thread plays this load's Original-only (or upgraded) Session.
+    const auto s = loader.getPlaybackSession();
+    const auto len = engine.getSessionLength();
+    if (st.original != StageState::done || s == nullptr || len <= 0 || len != s->length())
+        return;
 
-    juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (selector.release());
-    options.dialogTitle = "Audio settings";
-    options.dialogBackgroundColour = theme::colour (theme::panelArgb);
-    options.useNativeTitleBar = true;
-    options.resizable = true;
-    options.escapeKeyTriggersCloseButton = true;
-    settingsDialog = options.launchAsync();
+    const auto target = juce::jlimit ((juce::int64) 0, len, resumeSeekTarget);
+    const auto tolerance = (juce::int64) (engine.getSessionSampleRate() * 0.5);
+
+    if (resumeSeekIssued && std::abs (engine.getPlayheadSample() - target) <= tolerance)
+    {
+        resumeSeekTarget = -1;      // done (paused: the playhead sits exactly on it)
+        return;
+    }
+
+    // A seek that meets a Session swap (e.g. a corrected Alignment Offset) is dropped by the engine: retry.
+    if (++resumeSeekAttempts > 60)
+    {
+        resumeSeekTarget = -1;
+        return;
+    }
+
+    engine.seek (target);
+    resumeSeekIssued = true;
+}
+
+std::optional<SessionState> MainComponent::captureSessionState() const
+{
+    if (! originalFile.existsAsFile() || ! stemFile.existsAsFile())
+        return std::nullopt;
+
+    // Only once this pair's Original plays (until then the engine still reports the previous pair).
+    const auto s = loader.getPlaybackSession();
+    const auto len = engine.getSessionLength();
+    if (loader.getStatus().original != StageState::done || s == nullptr || len <= 0 || len != s->length())
+        return std::nullopt;
+
+    SessionState st;
+    st.originalPath = originalFile.getFullPathName();
+    st.stemFilePath = stemFile.getFullPathName();
+    st.playheadSample = engine.getPlayheadSample();
+    st.crossfade = engine.getCrossfade();
+    st.equalPowerCurve = engine.getCurve() == Curve::EqualPower;
+    st.residualListen = engine.getListenMode() == ListenMode::Residual;
+    for (int i = 0; i < Session::numStems; ++i)
+    {
+        st.muted[(size_t) i] = engine.isStemMuted (i);
+        st.soloed[(size_t) i] = engine.isStemSoloed (i);
+    }
+    const double v = deck.masterSlider.getValue();
+    st.masterGainDb = v <= masterMinDb - 0.5 ? -std::numeric_limits<double>::infinity() : v;
+    st.loopEnabled = engine.isLoopEnabled();
+    st.residualViewAmplified = tracks.isResidualAmplified();
+    return st;
+}
+
+void MainComponent::applySessionState (const SessionState& st)
+{
+    engine.setCurve (st.equalPowerCurve ? Curve::EqualPower : Curve::Linear);
+    engine.setListenMode (st.residualListen ? ListenMode::Residual : ListenMode::AB);
+    engine.setCrossfade (st.crossfade);
+    deck.crossfadeSlider.setValue (st.crossfade, juce::dontSendNotification);
+
+    for (int i = 0; i < Session::numStems; ++i)
+    {
+        engine.setStemMuted (i, st.muted[(size_t) i]);
+        engine.setStemSoloed (i, st.soloed[(size_t) i]);
+    }
+
+    deck.masterSlider.setValue (std::isfinite (st.masterGainDb) ? juce::jlimit (masterMinDb, 0.0, st.masterGainDb) : masterInfDb,
+                                juce::dontSendNotification);
+    deck.masterSlider.onValueChange();     // the engine and the readout
+
+    engine.setLoopRegion (0, 0);    // whole track
+    engine.setLoopEnabled (st.loopEnabled);
+    deck.loopButton.setToggleState (st.loopEnabled, juce::dontSendNotification);
+
+    tracks.setResidualAmplified (st.residualViewAmplified);
+    updateMixButtons();
+}
+
+void MainComponent::saveSessionState (bool force)
+{
+    // Not while a resumed position is still on its way (the saved one would be overwritten with 0).
+    if (! settings.getResumeSession() || resumeSeekTarget >= 0)
+        return;
+
+    const auto state = captureSessionState();
+    if (! state.has_value() || state == lastSavedSession)
+        return;
+
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    if (! force)
+    {
+        // At most once a second; while playing, a moving playhead alone only every 5 s.
+        bool onlyPlayhead = false;
+        if (lastSavedSession.has_value())
+        {
+            auto withNewPlayhead = *lastSavedSession;
+            withNewPlayhead.playheadSample = state->playheadSample;
+            onlyPlayhead = withNewPlayhead == *state;
+        }
+
+        const double interval = onlyPlayhead && engine.isPlaying() ? 5000.0 : 1000.0;
+        if (now - lastSessionSaveMs < interval)
+            return;
+    }
+
+    settings.setSession (*state);
+    settings.save();
+    lastSavedSession = state;
+    lastSessionSaveMs = now;
 }
 
 //==============================================================================
@@ -536,6 +728,12 @@ void MainComponent::updateStatusText()
     {
         left.add (seg ("   Note: " + st.notice, theme::amberArgb));
         lines.add ("Note:  " + st.notice);
+    }
+
+    if (resumeNotice.isNotEmpty())
+    {
+        left.add (seg ("   Note: " + resumeNotice, theme::amberArgb));
+        lines.add ("Note:  " + resumeNotice);
     }
 
     // Right: Alignment Offset, Track Null Depth, rate, device
@@ -679,6 +877,7 @@ void MainComponent::resetClip()
 
 void MainComponent::seekTo (juce::int64 sample)
 {
+    resumeSeekTarget = -1;      // the user's seek wins over a resumed position still on its way
     const auto len = engine.getSessionLength();
     if (len <= 0)
         return;
@@ -709,6 +908,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         if (code == '=' || code == '+' || code == juce::KeyPress::numberPadAdd)          { setScaleIndex (scaleIndex + 1); return true; }
         if (code == '-' || code == '_' || code == juce::KeyPress::numberPadSubtract)     { setScaleIndex (scaleIndex - 1); return true; }
         if (code == '0' || code == juce::KeyPress::numberPad0)                            { setScaleIndex (defaultScaleIndex); return true; }
+        if (code == ',' || code == '<')                                                   { showPreferences(); return true; }
         return false;
     }
 

@@ -4,6 +4,8 @@ juce_add_gui_app(StemAB_App
     VERSION      ${PROJECT_VERSION})
 
 target_sources(StemAB_App PRIVATE
+    AppSettings.cpp
+    AppSettings.h
     Main.cpp
     MainComponent.cpp
     MainComponent.h
@@ -11,6 +13,8 @@ target_sources(StemAB_App PRIVATE
     PlatformWindows.h
     SessionLoader.cpp
     SessionLoader.h
+    SessionState.cpp
+    SessionState.h
     Theme.h
     WaveformBuilder.cpp
     WaveformBuilder.h
@@ -25,6 +29,8 @@ target_sources(StemAB_App PRIVATE
     ui/MeterBridge.h
     ui/PlayheadOverlay.cpp
     ui/PlayheadOverlay.h
+    ui/PreferencesPanel.cpp
+    ui/PreferencesPanel.h
     ui/TimeRuler.cpp
     ui/TimeRuler.h
     ui/TrackArea.cpp

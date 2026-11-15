@@ -21,13 +21,13 @@ HeaderBar::HeaderBar()
 
     openOriginalButton.setButtonText ("Open original" + ellipsis);
     openStemButton.setButtonText ("Open stem file" + ellipsis);
-    settingsButton.setButtonText ("Audio settings" + ellipsis);
+    settingsButton.setButtonText ("Preferences" + ellipsis);
     scaleDownButton.setButtonText (juce::String (juce::CharPointer_UTF8 ("A\xe2\x88\x92")));
     scaleUpButton.setButtonText ("A+");
 
     openOriginalButton.setTooltip ("Open the Original (A): the mastered track");
     openStemButton.setTooltip ("Open the Stem File (B): an NI .stem.m4a");
-    settingsButton.setTooltip ("Audio device, sample rate and buffer size");
+    settingsButton.setTooltip ("Preferences: folders, interface size, audio device, session (Ctrl+,)");
     scaleDownButton.setTooltip ("Smaller interface (Ctrl+-)");
     scaleUpButton.setTooltip ("Larger interface (Ctrl+=); Ctrl+0 resets");
 
