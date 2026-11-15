@@ -7,32 +7,31 @@
 #include <memory>
 
 #include "SessionLoader.h"
+#include "WaveformBuilder.h"
 #include "engine/PlaybackEngine.h"
+#include "ui/ControlDeck.h"
+#include "ui/HeaderBar.h"
+#include "ui/MeterBridge.h"
+#include "ui/TrackArea.h"
 
 namespace stemab
 {
 
-/** Horizontal level meter: RMS bar plus a peak tick, -60..0 dBFS, red above 0 dBFS. Fed by the UI timer. */
-class MeterBar final : public juce::Component
-{
-public:
-    void setLevels (float peak, float rms);     // linear; applies a peak fall-back
-    void paint (juce::Graphics&) override;
+/** The main panel and coordinator: header bar, track area (A / Stems / R waveform lanes with one playhead),
+    meter bridge and the bottom control deck. It owns the engine, the device, the SessionLoader and the
+    WaveformBuilder, and wires the widgets to them. The audio callback calls only PlaybackEngine::process;
+    everything else polls the engine from a 30 fps timer.
 
-private:
-    float shownPeak = 0.0f, shownRms = 0.0f;
-};
-
-/** Checkpoint-4 test harness (functional, not the mockup): open a pair, transport, A/B/R crossfade,
-    Mute/Solo, meters, Master Gain, Clip, Live Null Depth, device/rate status. The audio callback calls only
-    PlaybackEngine::process; everything else polls the engine from a 30 fps timer. */
+    Two kinds of resizing: the window is freely resizable (lanes grow, the track area scrolls when even the
+    minimum lane height does not fit), and the interface scale (A- / A+, Ctrl+- / Ctrl+= / Ctrl+0) steps
+    90 / 100 / 115 / 130 %, multiplying every font size and metric through one uiScale factor. */
 class MainComponent final : public juce::Component,
                             private juce::ChangeListener,
                             private juce::Timer
 {
 public:
-    /** Smallest client-area size at which every section fits without clipping (see layout in resized()). */
-    static constexpr int minimumWidth = 960;
+    /** Smallest client-area size; below it the track area scrolls (and at 115 / 130 % the deck may wrap). */
+    static constexpr int minimumWidth = 1100;
     static constexpr int minimumHeight = 720;
 
     MainComponent();
@@ -70,13 +69,6 @@ private:
         PlaybackEngine& engine;
     };
 
-    struct StemRow
-    {
-        juce::Label name;
-        juce::TextButton mute { "M" }, solo { "S" };
-        MeterBar meter;
-    };
-
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
 
@@ -86,50 +78,45 @@ private:
     void showAudioSettings();
     void updateStatusText();
     void updateMixButtons();
+    void pollSession();
     void seekBySeconds (double seconds);
+    void seekTo (juce::int64 sample);
     void toggleStemSolo (int i);
     void toggleStemMute (int i);
     void setListenAB (float x);
     void toggleResidual();
+    void toggleLoop();
+    void resetClip();
 
-    static juce::String formatTime (double seconds);
+    void setScaleIndex (int index);
+    float uiScale() const noexcept;
+
     juce::File defaultFolder (const char* name) const;
 
-    // Destruction order matters (reverse of declaration): the loader and the device go before the engine.
+    // Destruction order matters (reverse of declaration): the waveform jobs and the loader go before the
+    // device, and the device before the engine.
     PlaybackEngine engine;
     juce::AudioDeviceManager deviceManager;
     EngineCallback engineCallback { engine };
     SessionLoader loader { deviceManager, engine };
+    WaveformBuilder waveforms;
     juce::String initialiseError;
 
+    juce::ApplicationProperties appProperties;
     juce::File originalFile, stemFile;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Component::SafePointer<juce::DialogWindow> settingsDialog;
+    juce::TooltipWindow tooltips { nullptr, 600 };
 
-    juce::TextButton openOriginalButton { "Open original..." }, openStemButton { "Open stem file..." },
-                     settingsButton { "Audio settings..." };
-    juce::Label statusLabel, deviceLabel;
+    HeaderBar header;
+    TrackArea tracks;
+    MeterBridge bridge;
+    ControlDeck deck;
 
-    juce::TextButton playButton { "Play" }, loopButton { "Loop" };
-    juce::Slider positionSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
-    juce::Label timeLabel;
+    std::shared_ptr<const Session> shownSession;    // what the lanes show (polled from the loader)
+    bool originalSummaryReady = false;
 
-    juce::TextButton aButton { "A" }, bButton { "B" }, rButton { "R" }, curveButton { "Equal power" };
-    juce::Slider crossfadeSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
-    juce::Label liveNullLabel;
-    juce::Label residualHelpLabel;      // caption explaining the R button, shown in the controls box
-    juce::Rectangle<int> controlsBox;   // bounds of the R / curve / Live Null box (set in resized(), drawn in paint())
-    juce::Rectangle<int> stemsBox;      // matching box around the four stem rows
-    juce::Rectangle<int> centreLine;    // the 50% / A|B boundary hairline (set in resized(), drawn in paint())
-
-    std::array<StemRow, Session::numStems> stemRows;
-
-    juce::Label meterLabels[3];
-    MeterBar meters[3][2];   // A, B, Output x L/R
-    juce::Label clipLabel;
-    juce::Label masterLabel;
-    juce::Slider masterSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
-
+    int scaleIndex = 1;                             // into scaleSteps (100 %)
     double clipShownUntilMs = 0.0;
     bool lastClipShown = false;
     bool stemControlsEnabled = false;   // the playing session has Stems (B, R, Crossfade, Mute/Solo usable)

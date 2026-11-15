@@ -6,6 +6,7 @@
 #include "Theme.h"
 #include "decode/Decode.h"
 #include "engine/LiveNullDepth.h"
+#include "ui/Format.h"
 
 #ifndef STEMAB_SOURCE_DIR
  #define STEMAB_SOURCE_DIR ""
@@ -17,94 +18,45 @@ namespace stemab
 namespace
 {
     constexpr double masterMinDb = -60.0;
-    constexpr double masterInfDb = -61.0;     // bottom of the slider = -inf
+    constexpr double masterInfDb = -61.0;     // bottom of the fader = -inf
 
-    const juce::Colour accent   { theme::accentArgb };
-    const juce::Colour dimText  { theme::dimTextArgb };
-    const juce::Colour clipRed  { 0xffe5484d };
-    const juce::Colour muteCol  { 0xffe0913a };
-    const juce::Colour soloCol  { 0xffe5c84a };
+    constexpr std::array<float, 4> scaleSteps { 0.9f, 1.0f, 1.15f, 1.3f };
+    constexpr int defaultScaleIndex = 1;
+    constexpr float bridgeWidthPx = 168.0f;
 
-    juce::String withThousands (juce::int64 v)
+    const juce::String middleDot (juce::CharPointer_UTF8 ("\xc2\xb7"));
+    const juce::String minusSign (juce::CharPointer_UTF8 ("\xe2\x88\x92"));
+    const juce::String rho (juce::CharPointer_UTF8 ("\xcf\x81"));
+    const juce::String ellipsis (juce::CharPointer_UTF8 ("\xe2\x80\xa6"));
+
+    juce::String gainText (double db)
     {
-        auto digits = juce::String (std::abs (v));
-        juce::String out;
-        for (int i = 0; i < digits.length(); ++i)
+        if (db <= masterMinDb - 0.5)
+            return minusSign + juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x9e dB"));
+        const auto v = juce::String (std::abs (db), 1);
+        return (db < 0.0 && v.getDoubleValue() != 0.0 ? minusSign : juce::String()) + v + " dB";
+    }
+
+    /** Children never take keyboard focus: the shortcuts go to MainComponent. */
+    void disableFocusRecursively (juce::Component& c)
+    {
+        for (auto* child : c.getChildren())
         {
-            if (i > 0 && (digits.length() - i) % 3 == 0)
-                out << ",";
-            out << digits[i];
+            child->setWantsKeyboardFocus (false);
+            child->setMouseClickGrabsKeyboardFocus (false);
+            disableFocusRecursively (*child);
         }
-        return (v < 0 ? "-" : "+") + out;
     }
 
-    void styleToggle (juce::TextButton& b, juce::Colour on)
+    HeaderBar::Segment seg (const juce::String& text, juce::uint32 argb, bool mono = false)
     {
-        b.setColour (juce::TextButton::buttonOnColourId, on);
-        b.setColour (juce::TextButton::textColourOnId, juce::Colour (theme::windowArgb));
+        return { text, theme::colour (argb), mono, false };
     }
 
-    /** Layout metrics. Gaps come from one spacing scale (4 / 8 / 12 / 16 / 24); heights are fixed per row type. */
-    namespace layout
+    HeaderBar::Segment dot (juce::uint32 argb)
     {
-        constexpr int s1 = 4, s2 = 8, s3 = 12, s4 = 16, s5 = 24;   // spacing scale
-        constexpr int margin = s4;          // window edge
-        constexpr int sectionGap = s5;      // between sections (a separator is centred in it)
-        constexpr int gutter = s3;          // each side of the 50% centre line
-
-        constexpr int buttonsH = 32, statusH = 150, deviceH = 40, transportH = 36;
-        constexpr int mixH = 36;            // crossfade slider row
-        constexpr int abH = 44;             // A / B meters: the primary content, so the tallest meters
-        constexpr int outH = 28, masterH = 30;   // tertiary: quieter, shorter
-
-        constexpr int boxPadX = s3, boxPadY = 10;   // inside the controls / stems boxes
-        constexpr int stemGap = 6;
-        constexpr int rowMin = 32, rowMax = 36;     // stem / control row height range
-        constexpr int bandMinH = 4 * rowMin + 3 * stemGap + 2 * boxPadY;   // 166
-        constexpr int bandMaxH = 4 * rowMax + 3 * stemGap + 2 * boxPadY;   // 182
-
-        // Everything resized() stacks at the smallest band height.
-        constexpr int requiredHeight = 2 * margin + buttonsH + s2 + statusH + deviceH + sectionGap + transportH
-                                     + sectionGap + mixH + s2 + abH + s3 + bandMinH + sectionGap + outH + s2 + masterH;
-        static_assert (requiredHeight <= MainComponent::minimumHeight,
-                       "MainComponent::minimumHeight is too small for the stacked layout");
+        return { {}, theme::colour (argb), false, true };
     }
-}
-
-//==============================================================================
-void MeterBar::setLevels (float peak, float rms)
-{
-    // Peak falls back ~20 dB/s at 30 fps; RMS follows directly.
-    shownPeak = juce::jmax (peak, shownPeak * 0.86f);
-    shownRms = rms;
-    repaint();
-}
-
-void MeterBar::paint (juce::Graphics& g)
-{
-    auto r = getLocalBounds().toFloat();
-    g.setColour (juce::Colour (theme::windowArgb));
-    g.fillRect (r);
-
-    const auto toX = [&r] (float linear)
-    {
-        const float db = linear > 0.0f ? 20.0f * std::log10 (linear) : -100.0f;
-        return r.getX() + r.getWidth() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
-    };
-
-    const float rmsX = toX (shownRms);
-    g.setColour (shownRms > 1.0f ? clipRed : accent.withAlpha (0.75f));
-    g.fillRect (r.withRight (rmsX));
-
-    if (shownPeak > 0.0f)
-    {
-        const float peakX = juce::jmin (toX (shownPeak), r.getRight() - 2.0f);
-        g.setColour (shownPeak > 1.0f ? clipRed : juce::Colour (theme::textArgb));
-        g.fillRect (juce::Rectangle<float> (peakX, r.getY(), 2.0f, r.getHeight()));
-    }
-
-    g.setColour (juce::Colour (theme::outlineArgb));
-    g.drawRect (r, 1.0f);
 }
 
 //==============================================================================
@@ -116,145 +68,103 @@ MainComponent::MainComponent()
 
     loader.onStatusChanged = [this] { updateStatusText(); };
 
-    // Files / settings
-    openOriginalButton.onClick = [this] { chooseOriginal(); };
-    openStemButton.onClick = [this] { chooseStemFile(); };
-    settingsButton.onClick = [this] { showAudioSettings(); };
-
-    for (auto* l : { &statusLabel, &deviceLabel })
+    // Interface scale, remembered in %APPDATA%/StemABPlayer/settings.xml
     {
-        l->setJustificationType (juce::Justification::topLeft);
-        l->setFont (juce::Font (juce::FontOptions (14.0f)));
-        l->setMinimumHorizontalScale (1.0f);
+        juce::PropertiesFile::Options options;
+        options.applicationName = "settings";
+        options.filenameSuffix = ".xml";
+        options.folderName = "StemABPlayer";
+        options.osxLibrarySubFolder = "Application Support";
+        appProperties.setStorageParameters (options);
+        if (auto* props = appProperties.getUserSettings())
+            scaleIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, props->getIntValue ("uiScaleIndex", defaultScaleIndex));
     }
-    deviceLabel.setColour (juce::Label::textColourId, dimText);
+
+    // Waveform summaries arrive on the message thread (stale ones are dropped by the builder).
+    waveforms.onOriginalReady = [this] (WaveformBuilder::SummaryPtr s)
+    {
+        originalSummaryReady = true;
+        tracks.setOriginalSummary (std::move (s));
+        tracks.setOriginalState (false);
+    };
+    waveforms.onStemsReady = [this] (const WaveformBuilder::StemSummaries& r)
+    {
+        tracks.setStemSummaries (r.stems, r.residual);
+    };
+
+    // Header
+    header.openOriginalButton.onClick = [this] { chooseOriginal(); };
+    header.openStemButton.onClick = [this] { chooseStemFile(); };
+    header.settingsButton.onClick = [this] { showAudioSettings(); };
+    header.scaleDownButton.onClick = [this] { setScaleIndex (scaleIndex - 1); };
+    header.scaleUpButton.onClick = [this] { setScaleIndex (scaleIndex + 1); };
 
     // Transport
-    playButton.onClick = [this] { engine.togglePlayPause(); };
-    loopButton.setClickingTogglesState (true);
-    styleToggle (loopButton, accent);
-    loopButton.onClick = [this]
+    deck.playButton.onClick = [this] { engine.togglePlayPause(); };
+    deck.toStartButton.onClick = [this] { seekTo (0); };
+    deck.backButton.onClick = [this] { seekBySeconds (-5.0); };
+    deck.forwardButton.onClick = [this] { seekBySeconds (5.0); };
+    deck.loopButton.onClick = [this]
     {
         engine.setLoopRegion (0, 0);    // whole track for now
-        engine.setLoopEnabled (loopButton.getToggleState());
+        engine.setLoopEnabled (deck.loopButton.getToggleState());
     };
 
-    positionSlider.setRange (0.0, 1.0, 1.0);
-    positionSlider.onValueChange = [this]
+    // Seeking from the waveform column (throttled by the overlay while dragging)
+    tracks.getOverlay().onSeek = [this] (juce::int64 sample) { seekTo (sample); };
+    tracks.setHint ("Open an original and a stem file");
+
+    // Crossfade
+    deck.crossfadeSlider.setRange (0.0, 1.0, 0.0);
+    deck.crossfadeSlider.setValue (0.0, juce::dontSendNotification);
+    deck.crossfadeSlider.setDoubleClickReturnValue (true, 0.5);
+    deck.crossfadeSlider.onValueChange = [this]
     {
-        if (positionSlider.isMouseButtonDown())
-            engine.seek ((juce::int64) positionSlider.getValue());
+        engine.setCrossfade ((float) deck.crossfadeSlider.getValue());
+        updateMixButtons();
     };
-    positionSlider.onDragEnd = [this] { engine.seek ((juce::int64) positionSlider.getValue()); };
-
-    timeLabel.setJustificationType (juce::Justification::centredRight);
-    timeLabel.setFont (juce::Font (juce::FontOptions (15.0f)));
-
-    // Mix
-    crossfadeSlider.setRange (0.0, 1.0, 0.0);
-    crossfadeSlider.setValue (0.0, juce::dontSendNotification);
-    crossfadeSlider.onValueChange = [this] { engine.setCrossfade ((float) crossfadeSlider.getValue()); updateMixButtons(); };
-    crossfadeSlider.setDoubleClickReturnValue (true, 0.5);
-
-    aButton.onClick = [this] { setListenAB (0.0f); };
-    bButton.onClick = [this] { setListenAB (1.0f); };
-    rButton.onClick = [this] { toggleResidual(); };
-    for (auto* b : { &aButton, &bButton, &rButton })
-        styleToggle (*b, accent);
-
-    curveButton.setClickingTogglesState (true);
-    curveButton.setToggleState (true, juce::dontSendNotification);
-    styleToggle (curveButton, juce::Colour (theme::panelArgb).brighter (0.4f));
-    curveButton.setColour (juce::TextButton::textColourOnId, juce::Colour (theme::textArgb));
-    curveButton.onClick = [this]
+    deck.residualButton.onClick = [this] { toggleResidual(); };
+    deck.centreButton.onClick = [this] { setListenAB (0.5f); };
+    deck.curveButton.onClick = [this]
     {
-        const bool eq = curveButton.getToggleState();
-        curveButton.setButtonText (eq ? "Equal power" : "Linear");
-        engine.setCurve (eq ? Curve::EqualPower : Curve::Linear);
+        engine.setCurve (engine.getCurve() == Curve::EqualPower ? Curve::Linear : Curve::EqualPower);
+        updateMixButtons();
     };
     engine.setCurve (Curve::EqualPower);
-
-    // Type scale: 13 caption / 15 body + readouts / 18 primary (A, B). Labels have no inset so left edges align.
-    liveNullLabel.setFont (juce::Font (juce::FontOptions (15.0f)));
-    liveNullLabel.setBorderSize (juce::BorderSize<int> (0));
-
-    residualHelpLabel.setText (juce::String (juce::CharPointer_UTF8 ("R = Residual (A \xe2\x88\x92 all stems)")),
-                               juce::dontSendNotification);
-    residualHelpLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
-    residualHelpLabel.setBorderSize (juce::BorderSize<int> (0));
-    residualHelpLabel.setJustificationType (juce::Justification::centredLeft);
-    residualHelpLabel.setMinimumHorizontalScale (1.0f);
-    residualHelpLabel.setColour (juce::Label::textColourId, dimText);
 
     // Stems
     for (int i = 0; i < Session::numStems; ++i)
     {
-        auto& row = stemRows[(size_t) i];
-        row.name.setText (stemName ((Stem) i), juce::dontSendNotification);
-        row.name.setBorderSize (juce::BorderSize<int> (0));
-        styleToggle (row.mute, muteCol);
-        styleToggle (row.solo, soloCol);
-        row.mute.onClick = [this, i] { toggleStemMute (i); };
-        row.solo.onClick = [this, i] { toggleStemSolo (i); };
-        addAndMakeVisible (row.name);
-        addAndMakeVisible (row.mute);
-        addAndMakeVisible (row.solo);
-        addAndMakeVisible (row.meter);
+        auto& h = tracks.getStemHeader (i);
+        h.mute.onClick = [this, i] { toggleStemMute (i); };
+        h.solo.onClick = [this, i] { toggleStemSolo (i); };
+        h.mute.setTooltip ("Mute " + juce::String (stemName ((Stem) i)) + " (Shift+" + juce::String (i + 1) + ")");
+        h.solo.setTooltip ("Solo " + juce::String (stemName ((Stem) i)) + " (" + juce::String (i + 1) + ")");
     }
 
-    // Meters, Clip, Master
-    const char* meterNames[] = { "A", "B", "Out" };
-    for (int m = 0; m < 3; ++m)
+    // Master Gain, Clip
+    deck.masterSlider.setRange (masterInfDb, 0.0, 0.1);
+    deck.masterSlider.setValue (0.0, juce::dontSendNotification);
+    deck.masterSlider.setDoubleClickReturnValue (true, 0.0);
+    deck.masterSlider.onValueChange = [this]
     {
-        meterLabels[m].setText (meterNames[m], juce::dontSendNotification);
-        meterLabels[m].setJustificationType (juce::Justification::centredLeft);   // left edge aligns with the boxes
-        meterLabels[m].setBorderSize (juce::BorderSize<int> (0));
-        if (m < 2)      // A and B are the primary compare: larger, bold, full-contrast text
-            meterLabels[m].setFont (juce::Font (juce::FontOptions (18.0f).withStyle ("Bold")));
-        else            // Out is tertiary: body size, dimmed
-            meterLabels[m].setColour (juce::Label::textColourId, dimText);
-        addAndMakeVisible (meterLabels[m]);
-        addAndMakeVisible (meters[m][0]);
-        addAndMakeVisible (meters[m][1]);
-    }
-
-    clipLabel.setText ("CLIP", juce::dontSendNotification);
-    clipLabel.setJustificationType (juce::Justification::centred);
-    clipLabel.setColour (juce::Label::textColourId, dimText);
-    clipLabel.setColour (juce::Label::outlineColourId, juce::Colour (theme::outlineArgb));
-
-    masterLabel.setText ("Master Gain", juce::dontSendNotification);
-    masterLabel.setBorderSize (juce::BorderSize<int> (0));
-    masterLabel.setColour (juce::Label::textColourId, dimText);
-    masterSlider.setRange (masterInfDb, 0.0, 0.1);
-    masterSlider.setValue (0.0, juce::dontSendNotification);
-    masterSlider.setDoubleClickReturnValue (true, 0.0);
-    masterSlider.setTextBoxStyle (juce::Slider::TextBoxRight, true, 80, 24);
-    masterSlider.textFromValueFunction = [] (double v)
-    {
-        return v <= masterMinDb - 0.5 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB";
-    };
-    masterSlider.onValueChange = [this]
-    {
-        const double v = masterSlider.getValue();
+        const double v = deck.masterSlider.getValue();
         engine.setMasterGainDb (v <= masterMinDb - 0.5 ? -std::numeric_limits<double>::infinity() : v);
+        deck.setGainText (gainText (v));
     };
+    deck.setGainText (gainText (0.0));
+    deck.clipButton.onClick = [this] { resetClip(); };
 
-    for (auto* c : std::initializer_list<juce::Component*> {
-             &openOriginalButton, &openStemButton, &settingsButton, &statusLabel, &deviceLabel,
-             &playButton, &loopButton, &positionSlider, &timeLabel,
-             &aButton, &crossfadeSlider, &bButton, &rButton, &curveButton, &liveNullLabel, &residualHelpLabel,
-             &clipLabel, &masterLabel, &masterSlider })
-        addAndMakeVisible (c);
+    addAndMakeVisible (header);
+    addAndMakeVisible (tracks);
+    addAndMakeVisible (bridge);
+    addAndMakeVisible (deck);
 
     // Keyboard shortcuts go to this component: no child takes focus.
-    for (auto* c : getChildren())
-    {
-        c->setWantsKeyboardFocus (false);
-        c->setMouseClickGrabsKeyboardFocus (false);
-    }
+    disableFocusRecursively (*this);
     setWantsKeyboardFocus (true);
 
+    setScaleIndex (scaleIndex);
     updateMixButtons();
     updateStatusText();
     setSize (1280, 800);
@@ -271,146 +181,48 @@ MainComponent::~MainComponent()
     deviceManager.removeChangeListener (this);
     deviceManager.removeAudioCallback (&engineCallback);
     deviceManager.closeAudioDevice();
-    // loader (declared after the device manager) is destroyed first, waiting for its worker.
+    // waveforms (cancels and joins its jobs) and loader (waits for its worker) are destroyed next.
 }
 
 //==============================================================================
+float MainComponent::uiScale() const noexcept
+{
+    return scaleSteps[(size_t) scaleIndex];
+}
+
+void MainComponent::setScaleIndex (int index)
+{
+    scaleIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, index);
+    const float s = uiScale();
+
+    header.setUiScale (s);
+    header.setScaleLabel (juce::String (juce::roundToInt (s * 100.0f)) + "%");
+    header.scaleDownButton.setEnabled (scaleIndex > 0);
+    header.scaleUpButton.setEnabled (scaleIndex < (int) scaleSteps.size() - 1);
+    tracks.setUiScale (s);
+    bridge.setUiScale (s);
+    deck.setUiScale (s);
+    resized();
+    repaint();
+
+    if (auto* props = appProperties.getUserSettings())
+        props->setValue ("uiScaleIndex", scaleIndex);
+}
+
 void MainComponent::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colour (theme::windowArgb));
-
-    // Section separators, each centred in its 24 px gap: above the transport, above the crossfade + A/B
-    // section, and above the Out meter + Master Gain section.
-    g.setColour (juce::Colour (theme::outlineArgb));
-    for (int y : { positionSlider.getY(), crossfadeSlider.getY(), meterLabels[2].getY() })
-        g.drawHorizontalLine (y - layout::sectionGap / 2, (float) layout::margin, (float) (getWidth() - layout::margin));
-
-    // Matching subtle boxes group the secondary controls: R / curve / Live Null (left) and the stems (right).
-    for (const auto& box : { controlsBox, stemsBox })
-        if (! box.isEmpty())
-            g.drawRoundedRectangle (box.toFloat().reduced (0.5f), 6.0f, 1.0f);
-
-    // 50% centre line: the crossfade slider's midpoint, the A|B meter divider and the gutter between the two
-    // boxes all sit on it. Children paint on top, so the thumb covers it at 50% and the track crosses it
-    // elsewhere. dimText at 65% gives ~3:1 against the window background (non-text UI contrast).
-    if (! centreLine.isEmpty())
-    {
-        g.setColour (juce::Colour (theme::dimTextArgb).withAlpha (0.65f));
-        g.fillRect (centreLine);
-    }
+    g.fillAll (theme::colour (theme::groundArgb));
 }
 
 void MainComponent::resized()
 {
-    using namespace layout;
+    const float s = uiScale();
+    auto r = getLocalBounds();
 
-    auto area = getLocalBounds().reduced (margin);
-
-    // Lays out one meter strip (label + two stereo bars) inside r. The label's left edge is the strip's left edge.
-    auto layoutMeter = [this] (int m, juce::Rectangle<int> r)
-    {
-        meterLabels[m].setBounds (r.removeFromLeft (40));
-        r.removeFromLeft (s2);
-        auto bars = r.reduced (0, 3);
-        meters[m][0].setBounds (bars.removeFromTop (bars.getHeight() / 2).withTrimmedBottom (1));
-        meters[m][1].setBounds (bars.withTrimmedTop (1));
-    };
-
-    // 1. Bottom block FIRST (Out meter + Master Gain), pulled from the bottom edge, so it stays pinned and
-    //    visible however little height is left: anything that runs short is the flexible band further up.
-    auto masterRow = area.removeFromBottom (masterH);
-    clipLabel.setBounds (masterRow.removeFromRight (60));
-    masterRow.removeFromRight (s3);
-    masterLabel.setBounds (masterRow.removeFromLeft (90));
-    masterSlider.setBounds (masterRow);
-
-    area.removeFromBottom (s2);
-    layoutMeter (2, area.removeFromBottom (outH));
-    area.removeFromBottom (sectionGap);      // the separator above the Out meter is centred in this gap
-
-    // 2. Fixed-height rows from the top.
-    auto top = area.removeFromTop (buttonsH);
-    openOriginalButton.setBounds (top.removeFromLeft (150));
-    top.removeFromLeft (s2);
-    openStemButton.setBounds (top.removeFromLeft (150));
-    settingsButton.setBounds (top.removeFromRight (150));
-
-    area.removeFromTop (s2);
-    statusLabel.setBounds (area.removeFromTop (statusH));
-    deviceLabel.setBounds (area.removeFromTop (deviceH));
-    area.removeFromTop (sectionGap);
-
-    auto transport = area.removeFromTop (transportH);
-    playButton.setBounds (transport.removeFromLeft (90));
-    transport.removeFromLeft (s2);
-    loopButton.setBounds (transport.removeFromLeft (70));
-    transport.removeFromLeft (s2);
-    timeLabel.setBounds (transport.removeFromRight (190));
-    positionSlider.setBounds (transport.reduced (s1, 0));
-
-    area.removeFromTop (sectionGap);
-
-    // Crossfade row: A and B buttons pinned to the ends, the slider between them. The two 44 px buttons and
-    // 8 px gaps are symmetric, so the slider's midpoint is the content centre.
-    auto mix = area.removeFromTop (mixH);
-    aButton.setBounds (mix.removeFromLeft (44));
-    mix.removeFromLeft (s2);
-    bButton.setBounds (mix.removeFromRight (44));
-    mix.removeFromRight (s2);
-    crossfadeSlider.setBounds (mix);
-
-    // A | B meters: exactly 50% each; the boundary is the content centre, with a gutter either side of it.
-    area.removeFromTop (s2);
-    auto abRow = area.removeFromTop (abH);
-    const int centreX = abRow.getX() + abRow.getWidth() / 2;    // == crossfade slider centre (to within 0.5 px)
-    auto aHalf = abRow.removeFromLeft (abRow.getWidth() / 2);
-    layoutMeter (0, aHalf.withTrimmedRight (gutter));
-    layoutMeter (1, abRow.withTrimmedLeft (gutter));
-
-    // 3. The flexible middle: the controls box (left) and the stems box (right) share one band that takes
-    //    whatever height remains (between bandMinH and bandMaxH). Rows scale with it; they never overlap the
-    //    bottom block because that was already removed from `area`.
-    area.removeFromTop (s3);
-    auto band = area.removeFromTop (juce::jlimit (0, bandMaxH, area.getHeight()));
-    auto bandLeft = band.removeFromLeft (band.getWidth() / 2);
-    controlsBox = bandLeft.withTrimmedRight (gutter);
-    stemsBox = band.withTrimmedLeft (gutter);
-
-    const int innerH = juce::jmax (0, band.getHeight() - 2 * boxPadY);
-    const int rowH = juce::jlimit (20, rowMax, (innerH - 3 * stemGap) / 4);
-    const auto rowAt = [rowH] (juce::Rectangle<int> inner, int k)
-    {
-        return juce::Rectangle<int> (inner.getX(), inner.getY() + k * (rowH + stemGap), inner.getWidth(), rowH)
-                   .getIntersection (inner);
-    };
-
-    // Controls box: R + curve on stem-row 0, caption on row 1, the Live Null readout anchored on row 3.
-    const auto boxInner = controlsBox.reduced (boxPadX, boxPadY);
-    auto controlsRow = rowAt (boxInner, 0);
-    rButton.setBounds (controlsRow.removeFromLeft (44));
-    controlsRow.removeFromLeft (s2);
-    curveButton.setBounds (controlsRow.removeFromLeft (110));
-    residualHelpLabel.setBounds (rowAt (boxInner, 1));
-    liveNullLabel.setBounds (rowAt (boxInner, 3));
-
-    // Stems box: name + Mute + Solo + meter per row.
-    const auto stemsInner = stemsBox.reduced (boxPadX, boxPadY);
-    for (int i = 0; i < Session::numStems; ++i)
-    {
-        auto& row = stemRows[(size_t) i];
-        auto r = rowAt (stemsInner, i);
-        row.name.setBounds (r.removeFromLeft (80));
-        row.mute.setBounds (r.removeFromLeft (36).reduced (0, 1));
-        r.removeFromLeft (s1);
-        row.solo.setBounds (r.removeFromLeft (36).reduced (0, 1));
-        r.removeFromLeft (s2);
-        row.meter.setBounds (r.reduced (0, rowH / 4));
-    }
-
-    // The 50% centre line: from just inside the crossfade row, down through the A|B meters and the gutter
-    // between the two boxes. 2 px wide so it is centred exactly on the pixel boundary at an even width.
-    const int lineTop = crossfadeSlider.getY() + s1;
-    centreLine = { centreX - 1, lineTop, 2, juce::jmax (0, controlsBox.getBottom() - lineTop) };
+    header.setBounds (r.removeFromTop (header.getPreferredHeight()));
+    deck.setBounds (r.removeFromBottom (deck.getPreferredHeight (r.getWidth())));
+    bridge.setBounds (r.removeFromRight (theme::scaled (bridgeWidthPx, s)));
+    tracks.setBounds (r);
 }
 
 //==============================================================================
@@ -418,6 +230,65 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
 {
     loader.deviceConfigurationChanged();
     updateStatusText();
+}
+
+void MainComponent::pollSession()
+{
+    const auto s = loader.getPlaybackSession();
+
+    // What the stem / residual lanes say while they have no waveform.
+    const auto& st = loader.getStatus();
+    const auto stemsState = s == nullptr ? TrackArea::StemsState::noSession
+                          : s->hasStems() ? TrackArea::StemsState::ready
+                          : (st.stems == StageState::failed || st.alignment == StageState::failed)
+                                ? TrackArea::StemsState::noSession
+                                : TrackArea::StemsState::loading;
+    tracks.setStemsState (stemsState);
+
+    if (s == shownSession)
+        return;
+
+    const auto previous = shownSession;
+    shownSession = s;
+
+    if (s == nullptr)
+    {
+        waveforms.cancelOriginal();
+        waveforms.cancelStems();
+        tracks.setOriginalSummary (nullptr);
+        tracks.setOriginalState (false);
+        tracks.clearStemSummaries();
+        tracks.setTimeline (0, 0.0);
+        return;
+    }
+
+    tracks.setTimeline (s->length(), s->sampleRate());
+
+    if (previous == nullptr || ! s->sharesOriginalWith (*previous))
+    {
+        // A new Original: its waveform, and the stem lanes start over.
+        originalSummaryReady = false;
+        tracks.setOriginalSummary (nullptr);
+        tracks.setOriginalState (true);
+        tracks.clearStemSummaries();
+        waveforms.buildOriginal (s);
+
+        const auto ext = juce::File::createFileWithoutCheckingPath (st.originalName).getFileExtension()
+                             .trimCharactersAtStart (".").toUpperCase();
+        tracks.setOriginalSubLabel ((ext.isNotEmpty() ? ext + " " + middleDot + " " : juce::String())
+                                    + format::kiloHertz (s->sampleRate()) + " " + middleDot + " stereo");
+    }
+
+    if (s->hasStems())
+    {
+        // New Stems or a corrected Alignment Offset: recompute (the old lanes stay until the new ones arrive).
+        waveforms.buildStems (s);
+    }
+    else
+    {
+        waveforms.cancelStems();
+        tracks.clearStemSummaries();
+    }
 }
 
 void MainComponent::timerCallback()
@@ -430,44 +301,54 @@ void MainComponent::timerCallback()
         grabKeyboardFocus();   // shortcuts; children never take focus, a click on the background regains it
     }
 
+    pollSession();
+
     // Transport
-    const bool playing = engine.isPlaying();
-    playButton.setButtonText (playing ? "Pause" : "Play");
+    deck.playButton.setPlaying (engine.isPlaying());
+    if (deck.loopButton.getToggleState() != engine.isLoopEnabled())
+        deck.loopButton.setToggleState (engine.isLoopEnabled(), juce::dontSendNotification);
 
     const auto len = engine.getSessionLength();
     const double rate = engine.getSessionSampleRate();
     const auto playhead = engine.getPlayheadSample();
 
-    if (len > 0)
-    {
-        if (positionSlider.getMaximum() != (double) len)
-            positionSlider.setRange (0.0, (double) len, 1.0);
-        if (! positionSlider.isMouseButtonDown())
-            positionSlider.setValue ((double) playhead, juce::dontSendNotification);
-    }
-    positionSlider.setEnabled (len > 0);
+    if (len > 0 && rate > 0.0)
+        deck.setTime (format::minutesSecondsMillis ((double) playhead / rate),
+                      "Sample: " + format::withThousands (playhead) + "\nTotal:  " + format::withThousands (len));
+    else
+        deck.setTime ("0:00.000", "no track loaded");
 
-    timeLabel.setText (rate > 0.0 ? formatTime ((double) playhead / rate) + " / " + formatTime ((double) len / rate)
-                                  : juce::String ("--:--.- / --:--.-"),
-                       juce::dontSendNotification);
+    tracks.update (playhead);
 
-    // Meters
+    // Meters. Peaks are read-and-reset, so every tap is read once per tick and fed to every meter that shows it.
     for (int i = 0; i < Session::numStems; ++i)
     {
-        const auto l = engine.readMeter ((MeterTap) ((int) MeterTap::Drums + i), 0);
-        const auto r = engine.readMeter ((MeterTap) ((int) MeterTap::Drums + i), 1);
-        stemRows[(size_t) i].meter.setLevels (juce::jmax (l.peak, r.peak), juce::jmax (l.rms, r.rms));
+        const auto tap = (MeterTap) ((int) MeterTap::Drums + i);
+        const auto l = engine.readMeter (tap, 0);
+        const auto r = engine.readMeter (tap, 1);
+        if (auto* m = tracks.getStemHeader (i).getMeter())
+            m->setLevels (juce::jmax (l.peak, r.peak), juce::jmax (l.rms, r.rms));
     }
 
     const MeterTap taps[3] = { MeterTap::Original, MeterTap::StemSum, MeterTap::Output };
+    float aPeak = 0.0f, aRms = 0.0f;
     for (int m = 0; m < 3; ++m)
         for (int c = 0; c < 2; ++c)
         {
             const auto reading = engine.readMeter (taps[m], c);
-            meters[m][c].setLevels (reading.peak, reading.rms);
+            bridge.setLevels (m, c, reading.peak, reading.rms);
+            if (m == MeterBridge::a)
+            {
+                aPeak = juce::jmax (aPeak, reading.peak);
+                aRms = juce::jmax (aRms, reading.rms);
+            }
+            if (m == MeterBridge::out)
+                deck.outMeters[(size_t) c].setLevels (reading.peak, reading.rms);
         }
+    if (auto* m = tracks.getOriginalHeader().getMeter())
+        m->setLevels (aPeak, aRms);
 
-    // Clip (latched ~1 s)
+    // Clip (latched ~1 s; a click on the LED resets it)
     const double now = juce::Time::getMillisecondCounterHiRes();
     if (engine.readAndClearClip())
         clipShownUntilMs = now + 1000.0;
@@ -476,8 +357,7 @@ void MainComponent::timerCallback()
     if (clipShown != lastClipShown)
     {
         lastClipShown = clipShown;
-        clipLabel.setColour (juce::Label::backgroundColourId, clipShown ? clipRed : juce::Colours::transparentBlack);
-        clipLabel.setColour (juce::Label::textColourId, clipShown ? juce::Colours::white : dimText);
+        deck.clipButton.setLit (clipShown);
     }
 
     // B/R availability follows the session the audio thread actually plays.
@@ -485,14 +365,13 @@ void MainComponent::timerCallback()
         updateMixButtons();
 
     // Live Null Depth (UI thread, against the immutable Session)
-    juce::String live = "Live Null Depth: -";
+    juce::String live = juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94 dB"));
     if (auto session = loader.getPlaybackSession(); session != nullptr && session->hasStems() && session->length() == len)
     {
         const auto nd = measureLiveNullDepth (*session, playhead);
-        live = nd.quiet ? juce::String ("Live Null Depth: quiet")
-                        : "Live Null Depth: " + juce::String (nd.nullDepthDb, 1) + " dB";
+        live = nd.quiet ? juce::String ("quiet") : format::withMinusSign (juce::String (nd.nullDepthDb, 1)) + " dB";
     }
-    liveNullLabel.setText (live, juce::dontSendNotification);
+    bridge.setLiveNullDepth (live);
 
     updateStatusText();
 }
@@ -577,7 +456,7 @@ void MainComponent::showAudioSettings()
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned (selector.release());
     options.dialogTitle = "Audio settings";
-    options.dialogBackgroundColour = juce::Colour (theme::windowArgb);
+    options.dialogBackgroundColour = theme::colour (theme::panelArgb);
     options.useNativeTitleBar = true;
     options.resizable = true;
     options.escapeKeyTriggersCloseButton = true;
@@ -588,16 +467,28 @@ void MainComponent::showAudioSettings()
 void MainComponent::updateStatusText()
 {
     const auto& st = loader.getStatus();
-    juce::StringArray lines;
+    juce::Array<HeaderBar::Segment> left, right;
+    juce::StringArray lines;   // the full detail, for the tooltip
+
+    header.setFileNames (originalFile.existsAsFile() ? originalFile.getFileName() : juce::String(),
+                         stemFile.existsAsFile() ? stemFile.getFileName() : juce::String());
 
     lines.add ("Original:  " + (originalFile.existsAsFile() ? originalFile.getFileName() : juce::String ("(none)"))
                + "        Stem file:  " + (stemFile.existsAsFile() ? stemFile.getFileName() : juce::String ("(none)")));
 
+    // Left: errors, progress, notices
     if (st.error.isNotEmpty())
+    {
+        left.add (seg ("ERROR: " + st.error, theme::meterClipArgb));
         lines.add ("ERROR: " + st.error);
+    }
 
     if (st.original == StageState::idle && st.progress.isEmpty())
     {
+        if (st.error.isEmpty())
+            left.add (seg (originalFile.existsAsFile() || stemFile.existsAsFile()
+                               ? juce::String ("Choose the other file to start")
+                               : juce::String ("Choose an original and a stem file"), theme::mutedTextArgb));
         lines.add ("Status:  choose an original and a stem file");
     }
     else
@@ -628,44 +519,88 @@ void MainComponent::updateStatusText()
 
         juce::String timing;
         if (st.timeToOriginal >= 0.0)
-            timing << "    A playable after " << secs (st.timeToOriginal);
+            timing << "A playable after " << secs (st.timeToOriginal);
         if (st.timeToStems >= 0.0)
             timing << ", B after " << secs (st.timeToStems);
 
-        lines.add ("Status:  " + st.progress + timing);
+        if (st.progress.isNotEmpty())
+            left.add (seg (st.progress, st.busy ? theme::textArgb : theme::mutedTextArgb));
+        if (timing.isNotEmpty())
+            left.add (seg ("   " + timing, theme::mutedTextArgb));
+
+        lines.add ("Status:  " + st.progress + (timing.isNotEmpty() ? "    " + timing : juce::String()));
         lines.add ("         " + stages);
     }
 
     if (st.notice.isNotEmpty())
+    {
+        left.add (seg ("   Note: " + st.notice, theme::amberArgb));
         lines.add ("Note:  " + st.notice);
+    }
+
+    // Right: Alignment Offset, Track Null Depth, rate, device
+    const auto sep = [&right] { right.add (seg ("  " + middleDot + "  ", theme::mutedTextArgb)); };
 
     if (st.hasAlignment)
-        lines.add ("Alignment Offset:  " + withThousands (st.offsetSamples) + " samples,  polarity "
+    {
+        right.add (dot (st.lowConfidence ? theme::amberArgb : theme::goodArgb));
+        right.add (seg ("Aligned ", theme::mutedTextArgb));
+        right.add (seg (format::withThousands (st.offsetSamples, true) + " smp", theme::textArgb, true));
+        right.add (seg (" " + middleDot + " " + rho + " ", theme::mutedTextArgb));
+        right.add (seg (juce::String (st.confidence, 4), theme::textArgb, true));
+        if (st.polarity < 0)
+            right.add (seg (" " + middleDot + " polarity " + minusSign + "1", theme::amberArgb));
+        if (st.lowConfidence)
+            right.add (seg ("  LOW CONFIDENCE", theme::amberArgb));
+
+        lines.add ("Alignment Offset:  " + format::withThousands (st.offsetSamples, true) + " samples,  polarity "
                    + (st.polarity < 0 ? "-1 (inverted)" : "+1") + ",  confidence " + juce::String (st.confidence, 4)
                    + (st.alignmentFromCache ? "  (cached, re-measuring)" : "")
                    + (st.lowConfidence ? "    LOW CONFIDENCE - check by ear" : ""));
+    }
 
     if (st.hasTrackNullDepth)
+    {
+        if (! right.isEmpty())
+            sep();
+        right.add (seg ("Track Null Depth ", theme::mutedTextArgb));
+        right.add (seg (format::withMinusSign (juce::String (st.trackNullDepthDb, 1)) + " dB", theme::textArgb, true));
         lines.add ("Track Null Depth:  " + juce::String (st.trackNullDepthDb, 1) + " dB");
+    }
 
     if (st.rateState.isNotEmpty())
         lines.add ("Playback:  " + st.rateState + (st.rateNote.isNotEmpty() ? "    [" + st.rateNote + "]" : juce::String()));
 
-
-    statusLabel.setText (lines.joinIntoString ("\n"), juce::dontSendNotification);
-    statusLabel.setColour (juce::Label::textColourId, st.error.isNotEmpty() || st.lowConfidence ? soloCol
-                                                                                               : juce::Colour (theme::textArgb));
-
     juce::String dev;
     if (auto* d = deviceManager.getCurrentAudioDevice())
+    {
+        if (! right.isEmpty())
+            sep();
+        right.add (seg (d->getName() + " " + middleDot + " ", theme::mutedTextArgb));
+        right.add (seg (format::kiloHertz (d->getCurrentSampleRate()), theme::textArgb, true));
+        if (engine.isResampling())
+            right.add (seg (" (resampled)", theme::mutedTextArgb));
+
         dev << "Device:  " << deviceManager.getCurrentAudioDeviceType() << "  /  " << d->getName()
             << "   " << juce::String (d->getCurrentSampleRate(), 0) << " Hz,  buffer "
             << d->getCurrentBufferSizeSamples() << " samples,  output latency " << d->getOutputLatencyInSamples() << " samples";
+    }
     else
+    {
+        if (! right.isEmpty())
+            sep();
+        right.add (seg ("No audio device open", theme::meterClipArgb));
         dev << "No audio device open" << (initialiseError.isNotEmpty() ? " (" + initialiseError + ")" : juce::String());
+    }
 
-    dev << "\n" << juce::String (ffmpegVersionString()) << (JUCE_ASIO ? "   |   ASIO built in" : "   |   built without ASIO");
-    deviceLabel.setText (dev, juce::dontSendNotification);
+    lines.add (dev);
+    lines.add (juce::String (ffmpegVersionString()) + (JUCE_ASIO ? "   |   ASIO built in" : "   |   built without ASIO"));
+
+    header.setStatus (left, right);
+    header.setTooltip (lines.joinIntoString ("\n"));
+
+    tracks.setHint (st.busy && shownSession == nullptr ? "Decoding the original" + ellipsis
+                                                       : juce::String ("Open an original and a stem file"));
 }
 
 void MainComponent::updateMixButtons()
@@ -678,30 +613,35 @@ void MainComponent::updateMixButtons()
     const bool stems = engine.sessionHasStems();
     stemControlsEnabled = stems;
 
-    rButton.setToggleState (residual, juce::dontSendNotification);
-    aButton.setToggleState (! residual && x <= 0.0f, juce::dontSendNotification);
-    bButton.setToggleState (! residual && x >= 1.0f, juce::dontSendNotification);
-    bButton.setEnabled (stems);
-    rButton.setEnabled (stems);
-    crossfadeSlider.setEnabled (stems && ! residual);
-    crossfadeSlider.setAlpha (stems && ! residual ? 1.0f : 0.4f);
+    deck.residualButton.setToggleState (residual, juce::dontSendNotification);
+    deck.residualButton.setEnabled (stems);
+    deck.crossfadeSlider.setEnabled (stems && ! residual);
+    deck.centreButton.setEnabled (stems && ! residual);
+    deck.setCrossfadeDimmed (! stems || residual);
+    deck.curveButton.setToggleState (engine.getCurve() == Curve::EqualPower, juce::dontSendNotification);
 
+    const int bPercent = juce::roundToInt (x * 100.0f);
+    deck.setCrossfadeReadout ("A " + juce::String (100 - bPercent) + " " + middleDot + " B " + juce::String (bPercent));
+
+    std::array<bool, Session::numStems> muted {}, soloed {};
     for (int i = 0; i < Session::numStems; ++i)
     {
-        auto& row = stemRows[(size_t) i];
-        row.mute.setToggleState (engine.isStemMuted (i), juce::dontSendNotification);
-        row.solo.setToggleState (engine.isStemSoloed (i), juce::dontSendNotification);
-        row.mute.setEnabled (stems);
-        row.solo.setEnabled (stems);
-        row.name.setAlpha (stems ? 1.0f : 0.4f);
+        auto& h = tracks.getStemHeader (i);
+        muted[(size_t) i] = engine.isStemMuted (i);
+        soloed[(size_t) i] = engine.isStemSoloed (i);
+        h.mute.setToggleState (muted[(size_t) i], juce::dontSendNotification);
+        h.solo.setToggleState (soloed[(size_t) i], juce::dontSendNotification);
+        h.mute.setEnabled (stems);
+        h.solo.setEnabled (stems);
     }
+    tracks.setAudibleStems (PlaybackEngine::audibleStems (muted, soloed));
 }
 
 void MainComponent::setListenAB (float x)
 {
     engine.setListenMode (ListenMode::AB);
     engine.setCrossfade (x);
-    crossfadeSlider.setValue (x, juce::dontSendNotification);
+    deck.crossfadeSlider.setValue (x, juce::dontSendNotification);
     updateMixButtons();
 }
 
@@ -723,6 +663,28 @@ void MainComponent::toggleStemMute (int i)
     updateMixButtons();
 }
 
+void MainComponent::toggleLoop()
+{
+    deck.loopButton.setToggleState (! deck.loopButton.getToggleState(), juce::dontSendNotification);
+    deck.loopButton.onClick();
+}
+
+void MainComponent::resetClip()
+{
+    engine.readAndClearClip();
+    clipShownUntilMs = 0.0;
+    lastClipShown = false;
+    deck.clipButton.setLit (false);
+}
+
+void MainComponent::seekTo (juce::int64 sample)
+{
+    const auto len = engine.getSessionLength();
+    if (len <= 0)
+        return;
+    engine.seek (juce::jlimit ((juce::int64) 0, len, sample));
+}
+
 void MainComponent::seekBySeconds (double seconds)
 {
     const auto len = engine.getSessionLength();
@@ -730,32 +692,33 @@ void MainComponent::seekBySeconds (double seconds)
     if (len <= 0 || rate <= 0.0)
         return;
 
-    const auto target = engine.getPlayheadSample() + (juce::int64) std::llround (seconds * rate);
-    engine.seek (juce::jlimit ((juce::int64) 0, len, target));
-}
-
-juce::String MainComponent::formatTime (double seconds)
-{
-    seconds = juce::jmax (0.0, seconds);
-    const int tenths = (int) std::floor (seconds * 10.0);
-    const int mins = tenths / 600;
-    const int secs = (tenths / 10) % 60;
-    return juce::String (mins).paddedLeft ('0', 2) + ":" + juce::String (secs).paddedLeft ('0', 2) + "." + juce::String (tenths % 10);
+    seekTo (engine.getPlayheadSample() + (juce::int64) std::llround (seconds * rate));
 }
 
 //==============================================================================
 bool MainComponent::keyPressed (const juce::KeyPress& key)
 {
     const auto mods = key.getModifiers();
-    if (mods.isCtrlDown() || mods.isAltDown() || mods.isCommandDown())
-        return false;
-
     const int code = key.getKeyCode();
+
+    // Interface scale: Ctrl+= / Ctrl+- / Ctrl+0
+    if (mods.isCtrlDown() || mods.isCommandDown())
+    {
+        if (mods.isAltDown())
+            return false;
+        if (code == '=' || code == '+' || code == juce::KeyPress::numberPadAdd)          { setScaleIndex (scaleIndex + 1); return true; }
+        if (code == '-' || code == '_' || code == juce::KeyPress::numberPadSubtract)     { setScaleIndex (scaleIndex - 1); return true; }
+        if (code == '0' || code == juce::KeyPress::numberPad0)                            { setScaleIndex (defaultScaleIndex); return true; }
+        return false;
+    }
+
+    if (mods.isAltDown())
+        return false;
 
     if (code == juce::KeyPress::spaceKey)      { engine.togglePlayPause(); return true; }
     if (code == juce::KeyPress::leftKey)       { seekBySeconds (mods.isShiftDown() ? -5.0 : -1.0); return true; }
     if (code == juce::KeyPress::rightKey)      { seekBySeconds (mods.isShiftDown() ? 5.0 : 1.0); return true; }
-    if (code == juce::KeyPress::homeKey)       { engine.seek (0); return true; }
+    if (code == juce::KeyPress::homeKey)       { seekTo (0); return true; }
 
     const auto c = juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) code);
 
@@ -770,10 +733,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         case 'B': setListenAB (1.0f); return true;
         case 'R': toggleResidual(); return true;
         case 'C': setListenAB (0.5f); return true;
-        case 'L':
-            loopButton.setToggleState (! loopButton.getToggleState(), juce::dontSendNotification);
-            loopButton.onClick();
-            return true;
+        case 'L': toggleLoop(); return true;
         default: break;
     }
 

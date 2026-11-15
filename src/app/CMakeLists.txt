@@ -11,7 +11,30 @@ target_sources(StemAB_App PRIVATE
     PlatformWindows.h
     SessionLoader.cpp
     SessionLoader.h
-    Theme.h)
+    Theme.h
+    WaveformBuilder.cpp
+    WaveformBuilder.h
+    ui/ControlDeck.cpp
+    ui/ControlDeck.h
+    ui/Format.h
+    ui/HeaderBar.cpp
+    ui/HeaderBar.h
+    ui/LevelMeter.cpp
+    ui/LevelMeter.h
+    ui/MeterBridge.cpp
+    ui/MeterBridge.h
+    ui/PlayheadOverlay.cpp
+    ui/PlayheadOverlay.h
+    ui/TimeRuler.cpp
+    ui/TimeRuler.h
+    ui/TrackArea.cpp
+    ui/TrackArea.h
+    ui/TrackHeader.cpp
+    ui/TrackHeader.h
+    ui/WaveformLane.cpp
+    ui/WaveformLane.h
+    ui/Widgets.cpp
+    ui/Widgets.h)
 
 # STEMAB_SOURCE_DIR: the file choosers open in the repo's "Audio Files/" and "Stem Files/" when present.
 target_compile_definitions(StemAB_App PRIVATE

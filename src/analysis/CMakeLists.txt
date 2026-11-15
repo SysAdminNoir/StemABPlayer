@@ -2,7 +2,9 @@ add_library(StemAB_Analysis STATIC
     Alignment.cpp
     Alignment.h
     NullDepth.cpp
-    NullDepth.h)
+    NullDepth.h
+    WaveformSummary.cpp
+    WaveformSummary.h)
 
 target_include_directories(StemAB_Analysis PUBLIC "${PROJECT_SOURCE_DIR}/src")
 
