@@ -13,6 +13,8 @@
 namespace stemab
 {
 
+class OutputResampler;
+
 /** What the listener hears (CONTEXT.md): the A<->B Crossfade, or the Residual (A - all four Stems). */
 enum class ListenMode { AB, Residual };
 
@@ -20,8 +22,10 @@ enum class ListenMode { AB, Residual };
     engine reads silence:
       Original - A, before the Crossfade;
       StemSum  - B after Mute/Solo, before the Crossfade;
-      Output   - what is written to the device (after Crossfade, Master Gain);
-      Drums..Vocals - each Stem after its Mute/Solo gain. */
+      Output   - what is written to the device (after Crossfade, Master Gain and, when the device does not run
+                 at the source rate, after the realtime resampler - ADR 0005);
+      Drums..Vocals - each Stem after its Mute/Solo gain.
+    All taps but Output are measured at the source rate, before the resampler. */
 enum class MeterTap : int { Original = 0, StemSum, Output, Drums, Bass, Other, Vocals };
 inline constexpr int numMeterTaps = 7;
 
@@ -35,13 +39,19 @@ struct MeterReading
 /** The realtime player: transport, A/B/Residual mix, Mute/Solo, Master Gain, Clip and meters.
 
     Threads:
-      - "audio thread": prepare() (while no callback runs) and process() - allocation-, lock- and I/O-free.
+      - "audio thread": process() - allocation-, lock- and I/O-free. prepare() is called while no callback
+        runs (it may allocate: it sizes the buffers and builds the output resampler).
       - "UI thread" (one thread, normally the message thread): every other member. Control setters only
         store atomics; the audio thread applies them at the start of its next block, ramped click-free.
 
     Listening path (ADR 0004): out = (gA*A + gB*B + gR*(A - S)) * MasterGain * transportFade, where
     B = sum of audible Stems (Mute/Solo) and S = sum of all four Stems. Nothing else: no limiter, no level
-    matching; samples above 1.0 are written as they are and reported as Clip. */
+    matching; samples above 1.0 are written as they are and reported as Clip.
+
+    Rates (ADR 0005): the mix (transport, fades, ramps, meters, playhead) always runs at the Session's own
+    rate. At the Native Rate (device rate == Session rate) the mix goes straight to the device. Otherwise the
+    one stereo mix goes through a realtime r8brain resampler (OutputResampler) to the device rate; Clip and
+    the Output meter are measured after it, so inter-sample overs count. */
 class PlaybackEngine final
 {
 public:
@@ -59,12 +69,13 @@ public:
     //==============================================================================
     // Audio thread
 
-    /** Call before the first process() and whenever the device (re)starts, while process() is not running. */
-    void prepare (double deviceSampleRate, int maximumBlockSize) noexcept;
+    /** Call before the first process() and whenever the device (re)starts, while process() is not running.
+        Builds the output resampler if the active session's rate differs from `deviceSampleRate` (allocates). */
+    void prepare (double deviceSampleRate, int maximumBlockSize);
 
     /** Renders one device block. Channels 0/1 get L/R (a mono device gets (L+R)/2); channels beyond 2 are
-        zeroed. With no session, a session whose rate differs from the device's, or while paused: silence.
-        Null channel pointers are skipped. */
+        zeroed. With no session or while paused: silence. Null channel pointers are skipped. Blocks larger
+        than prepare()'s maximumBlockSize are rendered in pieces. */
     void process (float* const* outputChannels, int numOutputChannels, int numSamples) noexcept;
 
     //==============================================================================
@@ -72,10 +83,14 @@ public:
 
     /** Hands a session to the audio thread (nullptr clears it). On the swap the playhead goes to 0 and the
         transport pauses; if audio is playing it fades out first. Sessions are only ever released on the UI
-        thread (here, in releaseRetiredSessions() or in the destructor), never on the audio thread. */
+        thread (here, in releaseRetiredSessions() or in the destructor), never on the audio thread.
+        If the session's rate differs from the prepared device rate, the output resampler it needs is built
+        here and handed over with it. */
     void setSession (std::shared_ptr<const Session> session);
 
-    /** Frees sessions the audio thread has finished with. Call it regularly (e.g. from the UI timer). */
+    /** Frees sessions and output resamplers the audio thread has finished with, and builds an output
+        resampler the audio thread asked for (rare: a race between setSession() and a device restart).
+        Call it regularly (e.g. from the UI timer). */
     void releaseRetiredSessions();
 
     //==============================================================================
@@ -118,9 +133,11 @@ public:
     //==============================================================================
     // UI thread: reads (published by the audio thread once per block)
 
-    /** Transport fade length in samples at the prepared rate (for tests and diagnostics). */
+    /** Transport fade length in samples at the mix (source) rate (for tests and diagnostics). */
     int getTransportFadeSamples() const noexcept    { return fadeLenPublished.load (std::memory_order_relaxed); }
 
+    /** In source-rate samples: the next sample the mixer will read. Not compensated for the output
+        resampler's latency (a few ms), so pause/seek/loop positions stay exact. */
     juce::int64 getPlayheadSample() const noexcept  { return playhead.load (std::memory_order_relaxed); }
     /** True while the transport runs (not during or after a Pause fade-out). */
     bool isPlaying() const noexcept                 { return playingFlag.load (std::memory_order_relaxed); }
@@ -128,13 +145,18 @@ public:
     /** Of the session the audio thread is playing (0 if none yet). */
     juce::int64 getSessionLength() const noexcept   { return sessionLength.load (std::memory_order_relaxed); }
     double getSessionSampleRate() const noexcept    { return sessionRate.load (std::memory_order_relaxed); }
-    /** True when the active session's rate differs from the prepared device rate (output is silent). */
-    bool isRateMismatched() const noexcept          { return rateMismatch.load (std::memory_order_relaxed); }
+    /** The rate passed to the last prepare(). */
+    double getDeviceSampleRate() const noexcept     { return deviceRatePublished.load (std::memory_order_relaxed); }
+    /** True while the mix goes through the realtime output resampler (device rate != mix rate). */
+    bool isResampling() const noexcept              { return resamplingFlag.load (std::memory_order_relaxed); }
+    /** The output resampler's nominal extra latency in seconds (0 at the Native Rate). */
+    double getResamplerLatencySeconds() const noexcept { return resamplerLatency.load (std::memory_order_relaxed); }
 
     /** Peak since the previous call for this tap/channel (read-and-reset) and the RMS of the last block. */
     MeterReading readMeter (MeterTap tap, int channel) noexcept;
 
-    /** True if any output sample had |x| > 1.0 since the previous call (read-and-clear). */
+    /** True if any sample sent to the device (after the resampler) had |x| > 1.0 since the previous call
+        (read-and-clear). */
     bool readAndClearClip() noexcept                { return clipFlag.exchange (false, std::memory_order_relaxed); }
 
 private:
@@ -149,6 +171,19 @@ private:
     void publish (int numSamples) noexcept;
     juce::int64 effectiveLoopStart() const noexcept;
     juce::int64 effectiveEnd() const noexcept;
+
+    void setMixRate (double rate) noexcept;
+    void updateOutputPath() noexcept;
+    void resumeMixer() noexcept;
+    void retireResampler (OutputResampler*) noexcept;
+    void requestResampler() noexcept;
+    static void pullSourceThunk (void* engine, float* left, float* right, int numSamples);
+    void pullSource (float* left, float* right, int numSamples) noexcept;
+    bool renderMix (float* left, float* right, int numSamples) noexcept;
+    void writeOutput (float* outL, float* outR, bool monoOut, int offset, int numSamples) noexcept;
+
+    // UI thread: hands a resampler built here to the audio thread.
+    void offerResampler (std::unique_ptr<OutputResampler>);
 
     //==============================================================================
     // UI -> audio (atomics)
@@ -166,12 +201,19 @@ private:
     std::atomic<double> masterGainDb { 0.0 };
     std::atomic<float> masterGainLinear { 1.0f };
 
+    // UI -> audio: an output resampler built off the audio thread. Whoever exchanges a pointer out owns it.
+    std::atomic<OutputResampler*> pendingResampler { nullptr };
+
     // audio -> UI (atomics)
     std::atomic<juce::int64> playhead { 0 };
     std::atomic<bool> playingFlag { false };
     std::atomic<juce::int64> sessionLength { 0 };
     std::atomic<double> sessionRate { 0.0 };
-    std::atomic<bool> rateMismatch { false };
+    std::atomic<double> deviceRatePublished { 44100.0 };
+    std::atomic<int> maxBlockPublished { 512 };
+    std::atomic<double> mixRatePublished { 44100.0 };
+    std::atomic<bool> resamplingFlag { false };
+    std::atomic<double> resamplerLatency { 0.0 };
     std::atomic<bool> clipFlag { false };
     std::atomic<int> fadeLenPublished { 441 };
     std::array<std::array<std::atomic<float>, 2>, numMeterTaps> meterPeak {}, meterRms {};
@@ -181,12 +223,25 @@ private:
     juce::AbstractFifo retiredFifo { retiredCapacity };
     std::array<const Session*, retiredCapacity> retiredSlots {};
 
+    // Retired output resamplers: same pattern (audio pushes, UI frees).
+    static constexpr int retiredResamplerCapacity = 8;
+    juce::AbstractFifo retiredResamplerFifo { retiredResamplerCapacity };
+    std::array<OutputResampler*, retiredResamplerCapacity> retiredResamplerSlots {};
+
+    // Audio -> UI: "please build a resampler mixRate -> deviceRate" (the serial bumps on each request).
+    std::atomic<double> requestSourceRate { 0.0 }, requestDeviceRate { 0.0 };
+    std::atomic<int> requestMaxBlock { 0 };
+    std::atomic<juce::uint32> requestSerial { 0 };
+    juce::uint32 servedRequestSerial = 0;   // UI thread only
+
     // UI-thread only: owners of every session the audio thread may still touch.
     std::vector<std::shared_ptr<const Session>> keepAlive;
 
     //==============================================================================
     // Audio-thread state
     double deviceRate = 44100.0;
+    double mixRate = 44100.0;               // the active session's rate (kept while there is none)
+    int maxBlock = 512;
     const Session* current = nullptr;
     const Session* incoming = nullptr;      // taken from pendingSession, waiting for a fade-out
     bool swapPending = false;
@@ -210,6 +265,15 @@ private:
     std::array<std::array<float, 2>, numMeterTaps> blockPeak {};
     std::array<std::array<double, 2>, numMeterTaps> blockSumSq {};
     bool blockClipped = false;
+    int sourceSamplesThisBlock = 0;
+
+    // Output path. resampler == nullptr: Native Rate, the mix goes straight to the device.
+    OutputResampler* resampler = nullptr;
+    OutputResampler* standby = nullptr;     // taken from pendingResampler, not needed yet (e.g. swap pending)
+    bool holdMixer = false;                 // switching the output path: feed silence, the transport waits
+    bool requestOpen = false;               // a request is published and not yet answered
+    juce::int64 silentRun = 0;              // consecutive silent source samples fed to the output path
+    std::vector<float> mixL, mixR;          // maxBlock: the mix (passthrough) or the resampled output
 
     JUCE_DECLARE_NON_COPYABLE (PlaybackEngine)
 };

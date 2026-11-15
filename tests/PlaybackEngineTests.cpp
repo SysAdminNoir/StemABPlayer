@@ -694,15 +694,20 @@ TEST_CASE ("Device edge cases: extra channels, no session, null pointers, rate m
         SUCCEED();
     }
 
-    SECTION ("a session at another rate than the device is never played")
+    SECTION ("a session at another rate than the device plays through the realtime resampler")
     {
         PlaybackEngine e;
         e.prepare (48000.0, block);
         e.setSession (noiseSession());   // 44.1 kHz
         e.play();
-        const auto o = render (e, 2048);
-        CHECK (e.isRateMismatched());
-        CHECK_FALSE (e.isPlaying());
-        CHECK (std::all_of (o.l.begin(), o.l.end(), [] (float x) { return x == 0.0f; }));
+        const auto o = render (e, 4800);
+        CHECK (e.isResampling());
+        CHECK (e.isPlaying());
+        CHECK (e.getDeviceSampleRate() == 48000.0);
+        CHECK (e.getSessionSampleRate() == rate);
+        CHECK (std::any_of (o.l.begin(), o.l.end(), [] (float x) { return x != 0.0f; }));
+        // 4800 device samples at 48 kHz = 100 ms = about 4410 source samples (plus the resampler's look-ahead).
+        CHECK (e.getPlayheadSample() >= 4410);
+        CHECK (e.getPlayheadSample() < 4410 + (juce::int64) std::ceil (e.getResamplerLatencySeconds() * rate) + 200);
     }
 }

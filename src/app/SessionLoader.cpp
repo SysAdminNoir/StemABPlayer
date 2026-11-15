@@ -16,6 +16,8 @@ namespace
 
     juce::String hz (double rate)                   { return juce::String (rate, 0) + " Hz"; }
 
+    juce::String arrow()                            { return juce::CharPointer_UTF8 (" \xe2\x86\x92 "); }   // U+2192
+
     /** JUCE's plain "Windows Audio" device type is WASAPI shared mode with Windows-side rate conversion. */
     bool isWasapiSharedWithAutoConvert (const juce::String& typeName)
     {
@@ -28,6 +30,7 @@ struct SessionLoader::SourceResult
     std::shared_ptr<const Session> session;
     AlignmentResult alignment;
     double trackNullDepthDb = 0.0;
+    double loadSeconds = 0.0;
     juce::StringArray notes;
 };
 
@@ -64,10 +67,8 @@ void SessionLoader::load (const juce::File& original, const juce::File& stemFile
     pool.removeAllJobs (true, 0);       // queued jobs go; a running one sees the new generation and stops
 
     // Replace the previous pair: stop playing it and free its buffers before decoding the next one.
-    source.reset();
-    playback.reset();
+    session.reset();
     engine.setSession (nullptr);
-    resampleInFlightRate = 0.0;
 
     status = {};
     status.originalName = original.getFileName();
@@ -155,7 +156,8 @@ void SessionLoader::runDecodeJob (int gen, juce::File originalFile, juce::File s
     result->session = Session::create (std::move (original.audio), std::move (aligned), rate);
     if (result->session == nullptr) { fail (gen, "Invalid sample rate"); return; }
 
-    result->notes.add ("Loaded in " + juce::String ((juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0, 1) + " s");
+    result->loadSeconds = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
+    result->notes.add ("Loaded in " + juce::String (result->loadSeconds, 2) + " s");
 
     postToMessageThread ([weak = weakSelf, gen, result]
     {
@@ -172,7 +174,7 @@ void SessionLoader::sourceReady (int gen, std::shared_ptr<SourceResult> result)
     if (gen != generation)
         return;
 
-    source = result->session;
+    session = result->session;
 
     const auto& al = result->alignment;
     status.hasAlignment = true;
@@ -182,11 +184,18 @@ void SessionLoader::sourceReady (int gen, std::shared_ptr<SourceResult> result)
     status.lowConfidence = al.lowConfidence;
     status.hasTrackNullDepth = true;
     status.trackNullDepthDb = result->trackNullDepthDb;
-    status.sourceRate = source->sampleRate();
+    status.sourceRate = session->sampleRate();
+    status.loadSeconds = result->loadSeconds;
 
+    // Native Rate first (the device restarts at the source rate if it accepts it), then hand the Session
+    // over: the engine builds its output resampler only if the device still runs at another rate.
     lastDeviceIdentity = deviceIdentity();
-    applyRatePolicy (source->sampleRate());
-    ensureSessionForDeviceRate();
+    applyRatePolicy (session->sampleRate());
+    engine.setSession (session);
+
+    status.busy = false;
+    status.progress = "Ready";
+    updateRateStatus();
     changed();
 }
 
@@ -235,7 +244,7 @@ double SessionLoader::applyRatePolicy (double sourceRate)
 
 void SessionLoader::deviceConfigurationChanged()
 {
-    if (source == nullptr)
+    if (session == nullptr)
         return;   // nothing loaded yet (a load in progress applies the policy when its decode finishes)
 
     const auto identity = deviceIdentity();
@@ -243,22 +252,23 @@ void SessionLoader::deviceConfigurationChanged()
     if (identity.isNotEmpty() && identity != lastDeviceIdentity)
     {
         lastDeviceIdentity = identity;
-        applyRatePolicy (source->sampleRate());   // a different device: try Native Rate again
+        applyRatePolicy (session->sampleRate());   // a different device: try Native Rate again
     }
 
-    ensureSessionForDeviceRate();
+    updateRateStatus();   // whatever rate the device ends up at, the engine adapts (realtime resampling)
     changed();
 }
 
-void SessionLoader::ensureSessionForDeviceRate()
+void SessionLoader::updateRateStatus()
 {
-    if (source == nullptr)
+    if (session == nullptr)
         return;
 
     auto* device = deviceManager.getCurrentAudioDevice();
     const double deviceRate = device != nullptr ? device->getCurrentSampleRate() : 0.0;
-    const double srcRate = source->sampleRate();
+    const double srcRate = session->sampleRate();
 
+    status.deviceRate = deviceRate;
     status.rateNote = policyNote;
 
     if (device != nullptr && isWasapiSharedWithAutoConvert (deviceManager.getCurrentAudioDeviceType()))
@@ -277,94 +287,12 @@ void SessionLoader::ensureSessionForDeviceRate()
         status.rateNote = status.rateNote.isEmpty() ? note : status.rateNote + "; " + note;
     }
 
-    if (deviceRate <= 0.0 || sameRate (deviceRate, srcRate))
-    {
-        // Native Rate (or no device yet: prepare at the source rate; re-checked when a device opens).
-        resampleInFlightRate = 0.0;
-        ++resampleSerial;
-
-        if (playback != source)
-            handToEngine (source);
-
-        status.busy = false;
-        status.progress = "Ready";
-        status.rateState = deviceRate > 0.0 ? "Native Rate " + hz (srcRate) : "No audio device";
-        return;
-    }
-
-    if (playback != nullptr && sameRate (playback->sampleRate(), deviceRate))
-    {
-        status.rateState = "Resampled " + hz (srcRate) + " -> " + hz (deviceRate);
-        return;   // already playing at this rate
-    }
-
-    if (sameRate (resampleInFlightRate, deviceRate))
-        return;   // already being made
-
-    startResample (deviceRate);
-}
-
-void SessionLoader::startResample (double toRate)
-{
-    const int gen = generation;
-    const int serial = ++resampleSerial;
-    resampleInFlightRate = toRate;
-
-    status.busy = true;
-    status.progress = "Resampling to the device rate...";
-    status.rateState = "Resampling " + hz (source->sampleRate()) + " -> " + hz (toRate) + "...";
-
-    pool.addJob ([this, gen, serial, toRate, src = source, weak = weakSelf]
-    {
-        if (latestGeneration.load() != gen)
-            return;
-
-        // A and all four Stems through the same resampler with the same settings (ADR 0004).
-        const double from = src->sampleRate();
-        auto a = resample (src->original(), from, toRate);
-        StemBuffers s;
-        for (int k = 0; k < Session::numStems; ++k)
-            s[(size_t) k] = resample (src->stem (k), from, toRate);
-
-        auto session = Session::create (std::move (a), std::move (s), toRate);
-
-        postToMessageThread ([weak, gen, serial, session]
-        {
-            if (auto* self = weak.get())
-                self->resampleReady (gen, serial, session);
-        });
-    });
-}
-
-void SessionLoader::resampleReady (int gen, int serial, std::shared_ptr<const Session> session)
-{
-    if (gen != generation || serial != resampleSerial || session == nullptr || source == nullptr)
-        return;
-
-    resampleInFlightRate = 0.0;
-
-    auto* device = deviceManager.getCurrentAudioDevice();
-    const double deviceRate = device != nullptr ? device->getCurrentSampleRate() : 0.0;
-
-    if (! sameRate (deviceRate, session->sampleRate()))
-    {
-        ensureSessionForDeviceRate();   // the device changed again meanwhile
-        changed();
-        return;
-    }
-
-    handToEngine (std::move (session));
-    status.busy = false;
-    status.progress = "Ready";
-    status.rateState = "Resampled " + hz (source->sampleRate()) + " -> " + hz (deviceRate);
-    changed();
-}
-
-void SessionLoader::handToEngine (std::shared_ptr<const Session> s)
-{
-    playback = std::move (s);
-    status.playbackRate = playback != nullptr ? playback->sampleRate() : 0.0;
-    engine.setSession (playback);
+    if (deviceRate <= 0.0)
+        status.rateState = "No audio device";
+    else if (sameRate (deviceRate, srcRate))
+        status.rateState = "Native Rate " + hz (srcRate);
+    else
+        status.rateState = "Resampled " + juce::String (srcRate, 0) + arrow() + hz (deviceRate) + " (realtime)";
 }
 
 } // namespace stemab

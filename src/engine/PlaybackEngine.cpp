@@ -1,5 +1,7 @@
 #include "engine/PlaybackEngine.h"
 
+#include "engine/OutputResampler.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -26,10 +28,13 @@ namespace
         return empty;
     }
 
-    inline bool isPlayable (const Session* s, double deviceRate) noexcept
-    {
-        return s != nullptr && s->length() > 0 && std::abs (s->sampleRate() - deviceRate) < 0.5;
-    }
+    /** A session with audio (the empty stand-in and nullptr have none; their rate means nothing). */
+    inline bool hasAudio (const Session* s) noexcept   { return s != nullptr && s->length() > 0; }
+
+    inline bool sameRate (double a, double b) noexcept  { return std::abs (a - b) < 0.5; }
+
+    /** Silent source samples that count as "fed for ever" (a fresh resampler holds nothing). */
+    constexpr juce::int64 alwaysSilent = std::numeric_limits<juce::int64>::max() / 4;
 }
 
 //==============================================================================
@@ -38,31 +43,75 @@ PlaybackEngine::PlaybackEngine()
     prepare (44100.0, 512);
 }
 
-PlaybackEngine::~PlaybackEngine() = default;   // keepAlive releases every session (the device must be stopped)
+PlaybackEngine::~PlaybackEngine()
+{
+    // The device must be stopped. keepAlive releases every session; the resamplers are freed here.
+    delete resampler;
+    delete standby;
+    delete pendingResampler.exchange (nullptr);
+
+    const int ready = retiredResamplerFifo.getNumReady();
+    retiredResamplerFifo.read (ready).forEach ([this] (int index) { delete retiredResamplerSlots[(size_t) index]; });
+}
 
 //==============================================================================
-void PlaybackEngine::prepare (double deviceSampleRate, int /*maximumBlockSize*/) noexcept
+void PlaybackEngine::prepare (double deviceSampleRate, int maximumBlockSize)
 {
     deviceRate = deviceSampleRate > 0.0 ? deviceSampleRate : 44100.0;
+    maxBlock = juce::jmax (256, maximumBlockSize);
 
-    const int fadeSamples = juce::jmax (1, (int) std::lround (transportFadeSeconds * deviceRate));
-    fadeLen = fadeSamples;
+    mixL.assign ((size_t) maxBlock, 0.0f);
+    mixR.assign ((size_t) maxBlock, 0.0f);
+
+    // Nothing to play: run the (silent) mix at the device rate, so nothing is resampled.
+    if (! hasAudio (current))
+        mixRate = deviceRate;
+
+    setMixRate (mixRate);
     fadePos = juce::jmin (fadePos, fadeLen);
-    fadeLenPublished.store (fadeLen, std::memory_order_relaxed);
 
     // reset() snaps each ramp to its target, so the first block starts settled.
     updateGainTargets();
     for (auto* g : { &gainA, &gainB, &gainR, &gainMaster })
-        g->reset (deviceRate, gainRampSeconds);
+        g->setCurrentAndTargetValue (g->getTargetValue());
     for (auto& g : gainStem)
-        g.reset (deviceRate, gainRampSeconds);
+        g.setCurrentAndTargetValue (g.getTargetValue());
 
-    rateMismatch.store (current != nullptr && current->length() > 0 && ! isPlayable (current, deviceRate),
-                        std::memory_order_relaxed);
+    // Rebuild the output path for the new device (no callback runs now, so building and freeing is fine).
+    delete resampler;
+    resampler = nullptr;
+    delete standby;
+    standby = nullptr;
+
+    if (! sameRate (mixRate, deviceRate))
+        resampler = new OutputResampler (mixRate, deviceRate, maxBlock);
+
+    // A session still waiting for its swap at another rate: its resampler too (one the UI built for the
+    // previous device rate would no longer match).
+    if (swapPending && hasAudio (incoming) && ! sameRate (incoming->sampleRate(), mixRate)
+        && ! sameRate (incoming->sampleRate(), deviceRate))
+        standby = new OutputResampler (incoming->sampleRate(), deviceRate, maxBlock);
+
+    // The device restarted: if the transport runs, come back with a fade-in rather than a hard start.
+    holdMixer = true;
+    resumeMixer();
+    requestOpen = false;
+    silentRun = alwaysSilent;
+
+    deviceRatePublished.store (deviceRate, std::memory_order_relaxed);
+    maxBlockPublished.store (maxBlock, std::memory_order_relaxed);
+    resamplingFlag.store (resampler != nullptr, std::memory_order_relaxed);
+    resamplerLatency.store (resampler != nullptr ? resampler->getLatencySeconds() : 0.0, std::memory_order_relaxed);
 }
 
 //==============================================================================
 // UI thread
+
+void PlaybackEngine::offerResampler (std::unique_ptr<OutputResampler> r)
+{
+    if (auto* never = pendingResampler.exchange (r.release(), std::memory_order_acq_rel))
+        delete never;    // the audio thread had not taken it: it never will
+}
 
 void PlaybackEngine::setSession (std::shared_ptr<const Session> session)
 {
@@ -70,6 +119,20 @@ void PlaybackEngine::setSession (std::shared_ptr<const Session> session)
 
     if (session == nullptr)
         session = emptySession();
+
+    // Build the output resampler this session needs now, off the audio thread, unless the active one fits.
+    std::unique_ptr<OutputResampler> needed;
+
+    if (hasAudio (session.get()))
+    {
+        const double dev = deviceRatePublished.load (std::memory_order_relaxed);
+        const double rate = session->sampleRate();
+        const bool activeFits = resamplingFlag.load (std::memory_order_relaxed)
+                                && sameRate (mixRatePublished.load (std::memory_order_relaxed), rate);
+
+        if (! sameRate (rate, dev) && ! activeFits)
+            needed = std::make_unique<OutputResampler> (rate, dev, maxBlockPublished.load (std::memory_order_relaxed));
+    }
 
     keepAlive.push_back (session);
 
@@ -80,21 +143,42 @@ void PlaybackEngine::setSession (std::shared_ptr<const Session> session)
         if (it != keepAlive.end())
             keepAlive.erase (it);
     }
+
+    // Right after the session, so the audio thread sees the session first (a resampler that arrives with
+    // no session needing it is dropped; the audio thread would then ask for it again - see updateOutputPath).
+    if (needed != nullptr)
+        offerResampler (std::move (needed));
 }
 
 void PlaybackEngine::releaseRetiredSessions()
 {
-    const int ready = retiredFifo.getNumReady();
-    if (ready <= 0)
-        return;
-
-    retiredFifo.read (ready).forEach ([this] (int index)
+    if (const int ready = retiredFifo.getNumReady(); ready > 0)
     {
-        const Session* done = retiredSlots[(size_t) index];
-        auto it = std::find_if (keepAlive.begin(), keepAlive.end(), [done] (const auto& p) { return p.get() == done; });
-        if (it != keepAlive.end())
-            keepAlive.erase (it);      // the last owner frees it here, on the UI thread
-    });
+        retiredFifo.read (ready).forEach ([this] (int index)
+        {
+            const Session* done = retiredSlots[(size_t) index];
+            auto it = std::find_if (keepAlive.begin(), keepAlive.end(), [done] (const auto& p) { return p.get() == done; });
+            if (it != keepAlive.end())
+                keepAlive.erase (it);      // the last owner frees it here, on the UI thread
+        });
+    }
+
+    if (const int ready = retiredResamplerFifo.getNumReady(); ready > 0)
+        retiredResamplerFifo.read (ready).forEach ([this] (int index) { delete retiredResamplerSlots[(size_t) index]; });
+
+    // The audio thread asked for a resampler it has no other way to get.
+    const auto serial = requestSerial.load (std::memory_order_acquire);
+    if (serial != servedRequestSerial)
+    {
+        servedRequestSerial = serial;
+        const double src = requestSourceRate.load (std::memory_order_relaxed);
+        const double dst = requestDeviceRate.load (std::memory_order_relaxed);
+        const int mb = requestMaxBlock.load (std::memory_order_relaxed);
+
+        // (If setSession() served it meanwhile, the audio thread drops the spare one.)
+        if (src > 0.0 && dst > 0.0 && mb > 0 && ! sameRate (src, dst))
+            offerResampler (std::make_unique<OutputResampler> (src, dst, mb));
+    }
 }
 
 void PlaybackEngine::play() noexcept     { transportCommand.store (1, std::memory_order_release); }
@@ -228,6 +312,10 @@ void PlaybackEngine::swapInIncomingSession() noexcept
     incoming = nullptr;
     swapPending = false;
 
+    // The mix runs at the session's own rate; the output path follows at the next block (updateOutputPath).
+    if (hasAudio (current) && ! sameRate (current->sampleRate(), mixRate))
+        setMixRate (current->sampleRate());
+
     pos = 0;
     running = false;
     fadePos = 0;
@@ -279,7 +367,7 @@ void PlaybackEngine::takeCommands() noexcept
             pendingJump = -1;
             pendingPause = false;
 
-            if (running && fadePos > 0 && isPlayable (current, deviceRate))
+            if (running && fadePos > 0 && hasAudio (current) && ! holdMixer)
                 beginFadeOut();          // swapped when the fade-out completes
             else
                 swapInIncomingSession();
@@ -302,7 +390,7 @@ void PlaybackEngine::takeCommands() noexcept
         }
     }
 
-    const bool playable = isPlayable (current, deviceRate);
+    const bool playable = hasAudio (current);
 
     // 3. Play / Pause (last command wins).
     switch (transportCommand.exchange (0, std::memory_order_acq_rel))
@@ -393,22 +481,215 @@ void PlaybackEngine::publish (int numSamples) noexcept
     playhead.store (pos, std::memory_order_relaxed);
     playingFlag.store (running && ! pendingPause && ! swapPending, std::memory_order_relaxed);
 
-    const bool hasSession = current != nullptr && current->length() > 0;
+    const bool hasSession = hasAudio (current);
     sessionLength.store (hasSession ? current->length() : 0, std::memory_order_relaxed);
     sessionRate.store (hasSession ? current->sampleRate() : 0.0, std::memory_order_relaxed);
-    rateMismatch.store (hasSession && ! isPlayable (current, deviceRate), std::memory_order_relaxed);
+    mixRatePublished.store (mixRate, std::memory_order_relaxed);
+    resamplingFlag.store (resampler != nullptr && ! holdMixer, std::memory_order_relaxed);
+    resamplerLatency.store (resampler != nullptr ? resampler->getLatencySeconds() : 0.0, std::memory_order_relaxed);
 
-    const double invN = numSamples > 0 ? 1.0 / (double) numSamples : 0.0;
+    // The source taps cover the source samples mixed in this block, the Output tap the device samples.
+    const double invSource = sourceSamplesThisBlock > 0 ? 1.0 / (double) sourceSamplesThisBlock : 0.0;
+    const double invOut = numSamples > 0 ? 1.0 / (double) numSamples : 0.0;
 
     for (size_t t = 0; t < (size_t) numMeterTaps; ++t)
+    {
+        const bool isOutput = t == (size_t) MeterTap::Output;
+
         for (size_t c = 0; c < 2; ++c)
         {
             accumulatePeak (meterPeak[t][c], blockPeak[t][c]);
-            meterRms[t][c].store ((float) std::sqrt (blockSumSq[t][c] * invN), std::memory_order_relaxed);
+
+            if (isOutput || sourceSamplesThisBlock > 0)
+                meterRms[t][c].store ((float) std::sqrt (blockSumSq[t][c] * (isOutput ? invOut : invSource)),
+                                      std::memory_order_relaxed);
         }
+    }
 
     if (blockClipped)
         clipFlag.store (true, std::memory_order_relaxed);
+}
+
+//==============================================================================
+// Output path (audio thread)
+
+void PlaybackEngine::setMixRate (double rate) noexcept
+{
+    mixRate = rate;
+
+    fadeLen = juce::jmax (1, (int) std::lround (transportFadeSeconds * mixRate));
+    fadePos = juce::jmin (fadePos, fadeLen);
+    fadeLenPublished.store (fadeLen, std::memory_order_relaxed);
+
+    // Ramp lengths in samples follow the rate (reset() also snaps each ramp to its target).
+    for (auto* g : { &gainA, &gainB, &gainR, &gainMaster })
+        g->reset (mixRate, gainRampSeconds);
+    for (auto& g : gainStem)
+        g.reset (mixRate, gainRampSeconds);
+
+    mixRatePublished.store (mixRate, std::memory_order_relaxed);
+}
+
+void PlaybackEngine::retireResampler (OutputResampler* r) noexcept
+{
+    if (r == nullptr)
+        return;
+
+    // Callers check for space first.
+    retiredResamplerFifo.write (1).forEach ([this, r] (int index) { retiredResamplerSlots[(size_t) index] = r; });
+}
+
+void PlaybackEngine::requestResampler() noexcept
+{
+    if (requestOpen)
+        return;
+
+    requestSourceRate.store (mixRate, std::memory_order_relaxed);
+    requestDeviceRate.store (deviceRate, std::memory_order_relaxed);
+    requestMaxBlock.store (maxBlock, std::memory_order_relaxed);
+    requestSerial.fetch_add (1, std::memory_order_release);
+    requestOpen = true;
+}
+
+void PlaybackEngine::resumeMixer() noexcept
+{
+    if (! holdMixer)
+        return;
+
+    holdMixer = false;
+
+    // The mix was held mid-stream: come back with a fade-in (or finish a pending fade-out at once).
+    if (running)
+    {
+        fadePos = 0;
+        if (fadeDir >= 0)
+            fadeDir = +1;
+    }
+}
+
+void PlaybackEngine::updateOutputPath() noexcept
+{
+    const bool wantPassthrough = sameRate (mixRate, deviceRate);
+
+    // 1. A resampler from the UI thread. Keep it as the standby (one at a time).
+    if (retiredResamplerFifo.getFreeSpace() >= 2)
+    {
+        if (auto* offered = pendingResampler.exchange (nullptr, std::memory_order_acq_rel))
+        {
+            retireResampler (standby);
+            standby = offered;
+            requestOpen = false;   // answered (if it does not fit, the next request goes out below)
+        }
+    }
+
+    // A standby that serves neither the mix rate nor a session waiting for its swap is useless.
+    if (standby != nullptr && retiredResamplerFifo.getFreeSpace() >= 1)
+    {
+        const bool forMix = ! wantPassthrough && resampler == nullptr && standby->matches (mixRate, deviceRate, maxBlock);
+        const bool forMixSwitch = ! wantPassthrough && resampler != nullptr
+                                  && ! resampler->matches (mixRate, deviceRate, maxBlock)
+                                  && standby->matches (mixRate, deviceRate, maxBlock);
+        const bool forIncoming = swapPending && hasAudio (incoming)
+                                 && standby->matches (incoming->sampleRate(), deviceRate, maxBlock)
+                                 && ! sameRate (incoming->sampleRate(), mixRate);
+
+        if (! (forMix || forMixSwitch || forIncoming))
+        {
+            retireResampler (standby);
+            standby = nullptr;
+        }
+    }
+
+    // 2. Is the active path right for (mixRate -> deviceRate)?
+    const bool fits = wantPassthrough ? resampler == nullptr
+                                      : resampler != nullptr && resampler->matches (mixRate, deviceRate, maxBlock);
+    if (fits)
+    {
+        requestOpen = false;
+        resumeMixer();
+        return;
+    }
+
+    // 3. Switch. Hold the mix and let the old resampler play out what it still holds, then swap paths.
+    holdMixer = true;
+
+    const bool flushed = resampler == nullptr || silentRun >= resampler->getFlushSourceSamples();
+    if (! flushed || retiredResamplerFifo.getFreeSpace() < 1)
+        return;
+
+    if (wantPassthrough)
+    {
+        retireResampler (resampler);
+        resampler = nullptr;
+        resumeMixer();
+        return;
+    }
+
+    if (standby != nullptr && standby->matches (mixRate, deviceRate, maxBlock))
+    {
+        retireResampler (resampler);
+        resampler = standby;
+        standby = nullptr;
+        silentRun = alwaysSilent;   // fresh: holds nothing
+        resumeMixer();
+        return;
+    }
+
+    requestResampler();   // silence until the UI thread builds it (releaseRetiredSessions())
+}
+
+void PlaybackEngine::pullSourceThunk (void* engine, float* left, float* right, int numSamples)
+{
+    static_cast<PlaybackEngine*> (engine)->pullSource (left, right, numSamples);
+}
+
+void PlaybackEngine::pullSource (float* left, float* right, int numSamples) noexcept
+{
+    bool sound = false;
+
+    if (holdMixer)
+    {
+        juce::FloatVectorOperations::clear (left, numSamples);
+        juce::FloatVectorOperations::clear (right, numSamples);
+    }
+    else
+    {
+        sound = renderMix (left, right, numSamples);
+    }
+
+    silentRun = sound ? 0 : juce::jmin (alwaysSilent, silentRun + numSamples);
+    sourceSamplesThisBlock += numSamples;
+}
+
+void PlaybackEngine::writeOutput (float* outL, float* outR, bool monoOut, int offset, int numSamples) noexcept
+{
+    constexpr size_t tOut = (size_t) MeterTap::Output;
+    const float* yL = mixL.data();
+    const float* yR = mixR.data();
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float y[2] = { yL[i], yR[i] };
+
+        for (size_t c = 0; c < 2; ++c)
+        {
+            blockPeak[tOut][c] = juce::jmax (blockPeak[tOut][c], std::abs (y[c]));
+            blockSumSq[tOut][c] += (double) y[c] * y[c];
+        }
+
+        if (std::abs (y[0]) > 1.0f || std::abs (y[1]) > 1.0f)
+            blockClipped = true;              // indicated, never hidden: the samples are written as they are
+
+        if (monoOut)
+        {
+            if (outL != nullptr) outL[offset + i] = 0.5f * (y[0] + y[1]);
+        }
+        else
+        {
+            if (outL != nullptr) outL[offset + i] = y[0];
+            if (outR != nullptr) outR[offset + i] = y[1];
+        }
+    }
 }
 
 void PlaybackEngine::process (float* const* outputChannels, int numOutputChannels, int numSamples) noexcept
@@ -434,19 +715,36 @@ void PlaybackEngine::process (float* const* outputChannels, int numOutputChannel
     for (auto& tap : blockPeak)  tap = { 0.0f, 0.0f };
     for (auto& tap : blockSumSq) tap = { 0.0, 0.0 };
     blockClipped = false;
+    sourceSamplesThisBlock = 0;
 
     takeCommands();
     updateGainTargets();
+    updateOutputPath();
 
-    // A session whose rate is not the device's is never played (it would be at the wrong speed/pitch).
-    if (running && ! isPlayable (current, deviceRate))
+    // Mix at the source rate; straight to the device (Native Rate) or through the resampler. Device blocks
+    // larger than prepare() announced are done in pieces.
+    for (int done = 0; done < numSamples;)
     {
-        running = false;
-        fadePos = 0;
-        fadeDir = 0;
-        pendingJump = -1;
-        pendingPause = false;
+        const int n = juce::jmin (numSamples - done, maxBlock);
+
+        if (resampler != nullptr)
+            resampler->render (&PlaybackEngine::pullSourceThunk, this, mixL.data(), mixR.data(), n);
+        else
+            pullSource (mixL.data(), mixR.data(), n);
+
+        writeOutput (outL, outR, monoOut, done, n);
+        done += n;
     }
+
+    publish (numSamples);
+}
+
+/** Mixes `numSamples` source-rate samples into left/right (silence when not running). Returns true if the
+    transport ran in this piece (i.e. it may contain sound). */
+bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexcept
+{
+    juce::FloatVectorOperations::clear (left, numSamples);
+    juce::FloatVectorOperations::clear (right, numSamples);
 
     if (! running)
     {
@@ -455,8 +753,7 @@ void PlaybackEngine::process (float* const* outputChannels, int numOutputChannel
         for (auto& g : gainStem)
             g.skip (numSamples);
 
-        publish (numSamples);
-        return;
+        return false;
     }
 
     const Session* s = current;
@@ -471,7 +768,7 @@ void PlaybackEngine::process (float* const* outputChannels, int numOutputChannel
     }
 
     constexpr size_t tA = (size_t) MeterTap::Original, tB = (size_t) MeterTap::StemSum,
-                     tOut = (size_t) MeterTap::Output, tStem0 = (size_t) MeterTap::Drums;
+                     tStem0 = (size_t) MeterTap::Drums;
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -484,7 +781,7 @@ void PlaybackEngine::process (float* const* outputChannels, int numOutputChannel
             gs[k] = gainStem[k].getNextValue();
 
         if (! running)
-            continue;   // paused (or swapped) earlier in this block: the rest stays silent
+            continue;   // paused (or swapped) earlier in this piece: the rest stays silent
 
         // A fade-out has reached zero: apply what it was for (swap / jump / pause).
         if (fadeDir < 0 && fadePos <= 0)
@@ -569,10 +866,8 @@ void PlaybackEngine::process (float* const* outputChannels, int numOutputChannel
             const float ya = a[c] * env, yb = b[c] * env;
             blockPeak[tA][c] = juce::jmax (blockPeak[tA][c], std::abs (ya));
             blockPeak[tB][c] = juce::jmax (blockPeak[tB][c], std::abs (yb));
-            blockPeak[tOut][c] = juce::jmax (blockPeak[tOut][c], std::abs (y[c]));
             blockSumSq[tA][c] += (double) ya * ya;
             blockSumSq[tB][c] += (double) yb * yb;
-            blockSumSq[tOut][c] += (double) y[c] * y[c];
 
             for (size_t k = 0; k < (size_t) Session::numStems; ++k)
             {
@@ -582,23 +877,13 @@ void PlaybackEngine::process (float* const* outputChannels, int numOutputChannel
             }
         }
 
-        if (std::abs (y[0]) > 1.0f || std::abs (y[1]) > 1.0f)
-            blockClipped = true;              // indicated, never hidden: the samples are written as they are
-
-        if (monoOut)
-        {
-            if (outL != nullptr) outL[i] = 0.5f * (y[0] + y[1]);
-        }
-        else
-        {
-            if (outL != nullptr) outL[i] = y[0];
-            if (outR != nullptr) outR[i] = y[1];
-        }
+        left[i] = y[0];
+        right[i] = y[1];
 
         ++pos;
     }
 
-    publish (numSamples);
+    return true;
 }
 
 } // namespace stemab

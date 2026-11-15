@@ -493,7 +493,9 @@ void MainComponent::updateStatusText()
     if (st.error.isNotEmpty())
         lines.add ("ERROR: " + st.error);
     else if (st.progress.isNotEmpty())
-        lines.add ("Status:  " + st.progress);
+        lines.add ("Status:  " + st.progress
+                   + (! st.busy && st.loadSeconds > 0.0 ? "  (loaded in " + juce::String (st.loadSeconds, 2) + " s)"
+                                                        : juce::String()));
     else
         lines.add ("Status:  choose an original and a stem file");
 
@@ -508,8 +510,6 @@ void MainComponent::updateStatusText()
     if (st.rateState.isNotEmpty())
         lines.add ("Playback:  " + st.rateState + (st.rateNote.isNotEmpty() ? "    [" + st.rateNote + "]" : juce::String()));
 
-    if (engine.isRateMismatched())
-        lines.add ("(waiting for a session at the device rate - output silent)");
 
     statusLabel.setText (lines.joinIntoString ("\n"), juce::dontSendNotification);
     statusLabel.setColour (juce::Label::textColourId, st.error.isNotEmpty() || st.lowConfidence ? soloCol

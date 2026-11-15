@@ -68,4 +68,5 @@ The output exceeding 0 dBFS. Indicated, never hidden; the remedy is lowering Mas
 
 **Native Rate / Resampled**
 Playback runs at the source's own sample rate when the output device accepts it (Native Rate). Only when it
-refuses are A and B both Resampled to the device rate, identically.
+refuses is the mixed output Resampled to the device rate on the fly. Everything heard goes through the
+same resampler, so A and B are still treated identically.

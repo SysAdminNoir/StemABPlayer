@@ -30,22 +30,22 @@ struct LoadStatus
     bool hasTrackNullDepth = false;
     double trackNullDepthDb = 0.0;
 
-    double sourceRate = 0.0;            // A's own rate (0 until decoded)
-    double playbackRate = 0.0;          // rate of the session handed to the engine (0: none yet)
-    juce::String rateState;             // "Native Rate 44100 Hz" / "Resampled 44100 -> 48000 Hz" / "Resampling..."
+    double sourceRate = 0.0;            // the Session's rate = A's own rate (0 until decoded)
+    double deviceRate = 0.0;            // the device's rate when the status was last updated (0: no device)
+    double loadSeconds = 0.0;           // decode + alignment + Track Null Depth + Session build
+    juce::String rateState;             // "Native Rate 44100 Hz" / "Resampled 44100 -> 48000 Hz (realtime)"
     juce::String rateNote;              // e.g. a WASAPI shared-mode remark
 };
 
-/** Glue between files, Decode/Analysis and the PlaybackEngine (checkpoint 4):
+/** Glue between files, Decode/Analysis and the PlaybackEngine:
 
       worker:  decodeOriginal + decodeStemFile -> Stems resampled to A's rate if they differ ->
-               measureAlignment -> alignStems -> computeNullDepth -> source-rate Session
-      message: rate policy (Native Rate preferred: ask the device for the source rate)
-      worker:  if the device runs at another rate, resample A and all four Stems identically (r8brain)
-      message: hand the Session to the engine.
+               measureAlignment -> alignStems -> computeNullDepth -> Session at the source rate
+      message: rate policy (Native Rate preferred: ask the device for the source rate), then hand the
+               Session to the engine.
 
-    The source-rate Session is kept while the pair is loaded, so a later device/rate change only re-runs the
-    resample step. Construct, use and destroy on the message thread. */
+    Loading never depends on the device rate: if the device runs at another rate, the engine resamples its
+    mixed output in realtime (ADR 0005). Construct, use and destroy on the message thread. */
 class SessionLoader final
 {
 public:
@@ -56,13 +56,13 @@ public:
     void load (const juce::File& original, const juce::File& stemFile);
 
     /** Call on every AudioDeviceManager change. A different device re-runs the rate policy (Native Rate
-        preferred); a rate change on the same device is respected and only triggers a resample. */
+        preferred); a rate change on the same device is respected (the engine resamples in realtime). */
     void deviceConfigurationChanged();
 
     const LoadStatus& getStatus() const noexcept                    { return status; }
 
     /** The session most recently handed to the engine (nullptr if none). */
-    std::shared_ptr<const Session> getPlaybackSession() const       { return playback; }
+    std::shared_ptr<const Session> getPlaybackSession() const       { return session; }
 
     /** Called on the message thread whenever getStatus() changed. */
     std::function<void()> onStatusChanged;
@@ -77,10 +77,7 @@ private:
 
     /** Rate policy on the message thread; returns the rate the device now runs at (0 if no device). */
     double applyRatePolicy (double sourceRate);
-    void ensureSessionForDeviceRate();
-    void startResample (double toRate);
-    void resampleReady (int generation, int serial, std::shared_ptr<const Session>);
-    void handToEngine (std::shared_ptr<const Session>);
+    void updateRateStatus();
     juce::String deviceIdentity() const;
     void changed();
 
@@ -93,11 +90,8 @@ private:
     juce::ThreadPool pool { juce::ThreadPoolOptions{}.withThreadName ("SessionLoader").withNumberOfThreads (1) };
     std::atomic<int> latestGeneration { 0 };
     int generation = 0;
-    int resampleSerial = 0;
-    double resampleInFlightRate = 0.0;
 
-    std::shared_ptr<const Session> source;     // source-rate Session (kept for re-resampling)
-    std::shared_ptr<const Session> playback;   // what the engine plays (== source at Native Rate)
+    std::shared_ptr<const Session> session;    // what the engine plays (at the source rate)
     juce::String lastDeviceIdentity;
     juce::String policyNote;                   // e.g. "Device refused 44100 Hz: ..."
     juce::WeakReference<SessionLoader> weakSelf;

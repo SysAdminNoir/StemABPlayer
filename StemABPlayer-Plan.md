@@ -22,8 +22,8 @@ Segoe UI Variable), with the changes listed under *UI* below.
   `ffmpeg.exe` or any decoder process (ADR 0002).
 - **Identical treatment of A and B** in the listening path: no limiter, no level-matching, no auto-trim.
   Master Gain is one scalar; over 0 dBFS shows **Clip** (ADR 0004).
-- **Native Rate preferred**: ask the device for the source rate; if it refuses, resample A and B identically
-  with r8brain-free-src when the file loads. The UI shows the active rate and whether audio is resampled.
+- **Native Rate preferred**: ask the device for the source rate; if it refuses, the engine mixes at the
+  source rate and resamples its single stereo output to the device rate in realtime (r8brain; ADR 0005). The UI shows the active rate and whether audio is resampled.
 - **Realtime path is allocation-free and lock-free**; UI sets atomic targets and polls meters at ~60 fps.
 - **Click-free**: every gain change, pause, seek and loop wrap ramps (`SmoothedValue`, ~5–10 ms).
 
@@ -42,7 +42,7 @@ Segoe UI Variable), with the changes listed under *UI* below.
 ## Targets (module boundaries)
 | Target | Owns | Depends on |
 |---|---|---|
-| `StemAB_Decode` | One libav-based reader for both inputs: the Original (any FFmpeg format) and the 4 Stem streams of a Stem File (Embedded Master never decoded); r8brain resample → one A buffer + four Stem buffers (`juce::AudioBuffer<float>`, in RAM) | FFmpeg (avformat, avcodec), r8brain |
+| `StemAB_Decode` | One libav-based reader for both inputs: the Original (any FFmpeg format) and the 4 Stem streams of a Stem File (Embedded Master never decoded) → one A buffer + four Stem buffers at the source rate (`juce::AudioBuffer<float>`, in RAM); offline `resample()` only if A and the Stems differ in rate | FFmpeg (avformat, avcodec), r8brain |
 | `StemAB_Engine` | Transport (play / pause / seek / loop with fades, one atomic playhead); mix (A bus, B = audible Stems, Residual = A − all Stems; crossfade curves; mute/solo); Master Gain; Clip; peak/RMS meters; Live Null Depth. Realtime only: no files, no GUI. | JUCE audio_basics, dsp |
 | `StemAB_Analysis` | Offline, on load: Alignment (cross-correlation, polarity, offset + confidence, manual nudge; ADR 0003) and Track Null Depth. Waveform min/max peak pyramid; A's 3-band (lo/mid/hi) energies; STFT spectrogram cache (log-freq, dB colour map, one shared scale across lanes) | JUCE dsp |
 | `StemAB_App` | GUI: LookAndFeel, lanes, ruler + loop drag, transport bar, crossfader + A/B/R, device selector, keyboard map, settings persistence | all of the above |
