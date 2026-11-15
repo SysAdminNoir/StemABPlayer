@@ -35,6 +35,24 @@ namespace
 
     /** Silent source samples that count as "fed for ever" (a fresh resampler holds nothing). */
     constexpr juce::int64 alwaysSilent = std::numeric_limits<juce::int64>::max() / 4;
+
+    inline bool hasStems (const Session* s) noexcept   { return s != nullptr && s->hasStems(); }
+
+    // pendingSession packs the Handover into the pointer's low bits.
+    static_assert (alignof (Session) >= 4, "the Handover tag needs two free low bits");
+    constexpr std::uintptr_t handoverMask = 3;
+
+    inline std::uintptr_t pack (const Session* s, Handover h) noexcept
+    {
+        return reinterpret_cast<std::uintptr_t> (s) | (std::uintptr_t) h;
+    }
+
+    inline const Session* sessionOf (std::uintptr_t packed) noexcept
+    {
+        return reinterpret_cast<const Session*> (packed & ~handoverMask);
+    }
+
+    inline Handover handoverOf (std::uintptr_t packed) noexcept   { return (Handover) (packed & handoverMask); }
 }
 
 //==============================================================================
@@ -72,7 +90,7 @@ void PlaybackEngine::prepare (double deviceSampleRate, int maximumBlockSize)
 
     // reset() snaps each ramp to its target, so the first block starts settled.
     updateGainTargets();
-    for (auto* g : { &gainA, &gainB, &gainR, &gainMaster })
+    for (auto* g : { &gainA, &gainB, &gainR, &gainMaster, &gainStemsPresent })
         g->setCurrentAndTargetValue (g->getTargetValue());
     for (auto& g : gainStem)
         g.setCurrentAndTargetValue (g.getTargetValue());
@@ -113,7 +131,25 @@ void PlaybackEngine::offerResampler (std::unique_ptr<OutputResampler> r)
         delete never;    // the audio thread had not taken it: it never will
 }
 
-void PlaybackEngine::setSession (std::shared_ptr<const Session> session)
+void PlaybackEngine::upgradeSession (std::shared_ptr<const Session> upgraded)
+{
+    releaseRetiredSessions();
+
+    if (upgraded == nullptr)
+        return;
+
+    keepAlive.push_back (upgraded);
+
+    // An earlier upgrade the audio thread never took is superseded: release it here.
+    if (const Session* never = pendingUpgrade.exchange (upgraded.get(), std::memory_order_acq_rel))
+    {
+        auto it = std::find_if (keepAlive.begin(), keepAlive.end(), [never] (const auto& p) { return p.get() == never; });
+        if (it != keepAlive.end())
+            keepAlive.erase (it);
+    }
+}
+
+void PlaybackEngine::setSession (std::shared_ptr<const Session> session, Handover handover)
 {
     releaseRetiredSessions();
 
@@ -137,7 +173,7 @@ void PlaybackEngine::setSession (std::shared_ptr<const Session> session)
     keepAlive.push_back (session);
 
     // If the audio thread had not yet taken the previous pending session, it never will: release it here.
-    if (const Session* never = pendingSession.exchange (session.get(), std::memory_order_acq_rel))
+    if (const Session* never = sessionOf (pendingSession.exchange (pack (session.get(), handover), std::memory_order_acq_rel)))
     {
         auto it = std::find_if (keepAlive.begin(), keepAlive.end(), [never] (const auto& p) { return p.get() == never; });
         if (it != keepAlive.end())
@@ -316,12 +352,63 @@ void PlaybackEngine::swapInIncomingSession() noexcept
     if (hasAudio (current) && ! sameRate (current->sampleRate(), mixRate))
         setMixRate (current->sampleRate());
 
-    pos = 0;
-    running = false;
+    const bool resume = incomingHandover != Handover::pauseAtStart && incomingResumes && hasAudio (current);
+    const juce::int64 len = current != nullptr ? current->length() : 0;
+
+    pos = incomingHandover == Handover::continueAtPosition ? juce::jlimit ((juce::int64) 0, len, pos) : 0;
+    running = resume;
     fadePos = 0;
-    fadeDir = 0;
+    fadeDir = resume ? +1 : 0;
     pendingJump = -1;
     pendingPause = false;
+    incomingHandover = Handover::pauseAtStart;
+    incomingResumes = false;
+
+    // B and the Residual enter with the transport fade-in, so their own ramp starts settled.
+    gainStemsPresent.setCurrentAndTargetValue (hasStems (current) ? 1.0f : 0.0f);
+}
+
+void PlaybackEngine::takeUpgrade() noexcept
+{
+    // Take the upgrade first: acquiring it makes everything the UI did before upgradeSession() visible, in
+    // particular a setSession() of the session it upgrades. That replacement must be taken first (the
+    // upgrade may be for it), so the upgrade is held until pendingSession is empty.
+    if (heldUpgrade == nullptr)
+    {
+        heldUpgrade = pendingUpgrade.exchange (nullptr, std::memory_order_acq_rel);
+    }
+    else if (retiredFifo.getFreeSpace() >= (swapPending ? 3 : 2))
+    {
+        if (const Session* newer = pendingUpgrade.exchange (nullptr, std::memory_order_acq_rel))
+        {
+            retire (heldUpgrade);       // superseded while held
+            heldUpgrade = newer;
+        }
+    }
+
+    // Keep a slot for the pending swap's own retire.
+    if (heldUpgrade == nullptr
+        || pendingSession.load (std::memory_order_acquire) != 0
+        || retiredFifo.getFreeSpace() < (swapPending ? 2 : 1))
+        return;
+
+    const Session* u = heldUpgrade;
+    heldUpgrade = nullptr;
+
+    if (swapPending && incoming != nullptr && u->sharesOriginalWith (*incoming))
+    {
+        retire (incoming);              // still waiting for its fade-out: swap the upgraded one in instead
+        incoming = u;
+    }
+    else if (current != nullptr && u->sharesOriginalWith (*current) && sameRate (u->sampleRate(), current->sampleRate()))
+    {
+        retire (current);               // same Original, same length and rate: the transport carries on
+        current = u;                    // (updateGainTargets() ramps B and R in or out)
+    }
+    else
+    {
+        retire (u);                     // stale: for a session that is no longer here
+    }
 }
 
 void PlaybackEngine::resolveFadeOut() noexcept
@@ -357,12 +444,17 @@ void PlaybackEngine::takeCommands() noexcept
     // 1. Session handoff (needs room to retire both the session being replaced and a superseded incoming one).
     if (retiredFifo.getFreeSpace() >= 2)
     {
-        if (const Session* p = pendingSession.exchange (nullptr, std::memory_order_acq_rel))
+        if (const auto packed = pendingSession.exchange (0, std::memory_order_acq_rel); packed != 0)
         {
+            const Session* p = sessionOf (packed);
+
             if (swapPending)
                 retire (incoming);
+            else
+                incomingResumes = running && ! pendingPause;   // playing (not fading into a Pause) now
 
             incoming = p;
+            incomingHandover = handoverOf (packed);
             swapPending = true;
             pendingJump = -1;
             pendingPause = false;
@@ -373,6 +465,9 @@ void PlaybackEngine::takeCommands() noexcept
                 swapInIncomingSession();
         }
     }
+
+    // 1b. Session upgrade (same Original, e.g. the Stems arrived): no fade, the transport carries on.
+    takeUpgrade();
 
     // 2. Loop settings (seqlock read; a torn read keeps the previous region until the next block).
     loopOn = loopEnabled.load (std::memory_order_acquire);
@@ -396,7 +491,13 @@ void PlaybackEngine::takeCommands() noexcept
     switch (transportCommand.exchange (0, std::memory_order_acq_rel))
     {
         case 1:   // play
-            if (swapPending || ! playable)
+            if (swapPending)
+            {
+                incomingResumes = true;               // honoured by a continue* handover
+                break;
+            }
+
+            if (! playable)
                 break;
 
             if (! running)
@@ -416,7 +517,11 @@ void PlaybackEngine::takeCommands() noexcept
             break;
 
         case 2:   // pause
-            if (running && ! swapPending)
+            if (swapPending)
+            {
+                incomingResumes = false;
+            }
+            else if (running)
             {
                 pendingPause = true;
                 beginFadeOut();                       // resolved at fade == 0 (next sample if already 0)
@@ -474,6 +579,7 @@ void PlaybackEngine::updateGainTargets() noexcept
         gainStem[i].setTargetValue (audible[i] ? 1.0f : 0.0f);
 
     gainMaster.setTargetValue (masterGainLinear.load (std::memory_order_relaxed));
+    gainStemsPresent.setTargetValue (hasStems (current) ? 1.0f : 0.0f);
 }
 
 void PlaybackEngine::publish (int numSamples) noexcept
@@ -484,6 +590,7 @@ void PlaybackEngine::publish (int numSamples) noexcept
     const bool hasSession = hasAudio (current);
     sessionLength.store (hasSession ? current->length() : 0, std::memory_order_relaxed);
     sessionRate.store (hasSession ? current->sampleRate() : 0.0, std::memory_order_relaxed);
+    sessionStems.store (hasSession && current->hasStems(), std::memory_order_relaxed);
     mixRatePublished.store (mixRate, std::memory_order_relaxed);
     resamplingFlag.store (resampler != nullptr && ! holdMixer, std::memory_order_relaxed);
     resamplerLatency.store (resampler != nullptr ? resampler->getLatencySeconds() : 0.0, std::memory_order_relaxed);
@@ -526,6 +633,7 @@ void PlaybackEngine::setMixRate (double rate) noexcept
         g->reset (mixRate, gainRampSeconds);
     for (auto& g : gainStem)
         g.reset (mixRate, gainRampSeconds);
+    gainStemsPresent.reset (mixRate, stemsFadeSeconds);
 
     mixRatePublished.store (mixRate, std::memory_order_relaxed);
 }
@@ -748,7 +856,7 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
 
     if (! running)
     {
-        for (auto* g : { &gainA, &gainB, &gainR, &gainMaster })
+        for (auto* g : { &gainA, &gainB, &gainR, &gainMaster, &gainStemsPresent })
             g->skip (numSamples);
         for (auto& g : gainStem)
             g.skip (numSamples);
@@ -758,6 +866,7 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
 
     const Session* s = current;
     const juce::int64 len = s->length();
+    const bool stemsPresent = s->hasStems();   // false: Original only - B and the Residual are silent
     const float* aL = s->originalChannel (0);
     const float* aR = s->originalChannel (1);
     std::array<const float*, Session::numStems> sL {}, sR {};
@@ -776,12 +885,14 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
         const float gb = gainB.getNextValue();
         const float gr = gainR.getNextValue();
         const float gm = gainMaster.getNextValue();
+        const float gp = gainStemsPresent.getNextValue();
         std::array<float, Session::numStems> gs {};
         for (size_t k = 0; k < gs.size(); ++k)
-            gs[k] = gainStem[k].getNextValue();
+            gs[k] = gainStem[k].getNextValue() * gp;   // exact when gp == 1 (the steady state)
 
-        if (! running)
-            continue;   // paused (or swapped) earlier in this piece: the rest stays silent
+        if (! running || current != s)
+            continue;   // paused or swapped earlier in this piece: the rest stays silent (the new session
+                        // starts with the next piece, at fade 0)
 
         // A fade-out has reached zero: apply what it was for (swap / jump / pause).
         if (fadeDir < 0 && fadePos <= 0)
@@ -846,22 +957,28 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
             a[0] = aL[n];
             a[1] = aR[n];
 
-            for (size_t k = 0; k < (size_t) Session::numStems; ++k)
+            if (stemsPresent)
             {
-                const float l = sL[k][n], r = sR[k][n];
-                all[0] += l;
-                all[1] += r;
-                stemOut[k] = { gs[k] * l, gs[k] * r };
-                b[0] += stemOut[k][0];
-                b[1] += stemOut[k][1];
+                for (size_t k = 0; k < (size_t) Session::numStems; ++k)
+                {
+                    const float l = sL[k][n], r = sR[k][n];
+                    all[0] += l;
+                    all[1] += r;
+                    stemOut[k] = { gs[k] * l, gs[k] * r };
+                    b[0] += stemOut[k][0];
+                    b[1] += stemOut[k][1];
+                }
             }
         }
+
+        // Without Stems the Residual is silent too (not A); while they fade in it follows gp.
+        const float grp = gr * gp;
 
         float y[2];
         for (size_t c = 0; c < 2; ++c)
         {
-            const float residual = a[c] - all[c];
-            y[c] = (ga * a[c] + gb * b[c] + gr * residual) * gm * env;
+            const float residual = stemsPresent ? a[c] - all[c] : 0.0f;
+            y[c] = (ga * a[c] + gb * b[c] + grp * residual) * gm * env;
 
             const float ya = a[c] * env, yb = b[c] * env;
             blockPeak[tA][c] = juce::jmax (blockPeak[tA][c], std::abs (ya));

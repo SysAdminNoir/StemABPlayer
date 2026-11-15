@@ -252,7 +252,7 @@ void MainComponent::resized()
     settingsButton.setBounds (top.removeFromRight (150));
 
     area.removeFromTop (8);
-    statusLabel.setBounds (area.removeFromTop (120));
+    statusLabel.setBounds (area.removeFromTop (150));
     deviceLabel.setBounds (area.removeFromTop (40));
     area.removeFromTop (20);
 
@@ -381,9 +381,13 @@ void MainComponent::timerCallback()
         clipLabel.setColour (juce::Label::textColourId, clipShown ? juce::Colours::white : dimText);
     }
 
+    // B/R availability follows the session the audio thread actually plays.
+    if (engine.sessionHasStems() != stemControlsEnabled)
+        updateMixButtons();
+
     // Live Null Depth (UI thread, against the immutable Session)
     juce::String live = "Live Null Depth: -";
-    if (auto session = loader.getPlaybackSession(); session != nullptr && session->length() == len)
+    if (auto session = loader.getPlaybackSession(); session != nullptr && session->hasStems() && session->length() == len)
     {
         const auto nd = measureLiveNullDepth (*session, playhead);
         live = nd.quiet ? juce::String ("Live Null Depth: quiet")
@@ -492,16 +496,54 @@ void MainComponent::updateStatusText()
 
     if (st.error.isNotEmpty())
         lines.add ("ERROR: " + st.error);
-    else if (st.progress.isNotEmpty())
-        lines.add ("Status:  " + st.progress
-                   + (! st.busy && st.loadSeconds > 0.0 ? "  (loaded in " + juce::String (st.loadSeconds, 2) + " s)"
-                                                        : juce::String()));
-    else
+
+    if (st.original == StageState::idle && st.progress.isEmpty())
+    {
         lines.add ("Status:  choose an original and a stem file");
+    }
+    else
+    {
+        // Per-stage progress with the time each stage took / was reached (seconds since the pair was chosen).
+        const auto secs = [] (double s) { return juce::String (s, 2) + " s"; };
+        const auto mark = [] (StageState s)
+        {
+            switch (s)
+            {
+                case StageState::done:    return juce::String (juce::CharPointer_UTF8 ("\xe2\x9c\x93"));   // check mark
+                case StageState::running: return juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa6"));   // ellipsis
+                case StageState::failed:  return juce::String ("failed");
+                case StageState::idle:    break;
+            }
+            return juce::String ("-");
+        };
+
+        juce::String stages;
+        stages << "Original " << mark (st.original)
+               << (st.original == StageState::done ? (st.originalReused ? " (reused)" : " " + secs (st.decodeOriginalSeconds)) : juce::String())
+               << "    Stems " << mark (st.stems)
+               << (st.stems == StageState::done ? " " + secs (st.decodeStemsSeconds) : juce::String())
+               << "    Alignment " << mark (st.alignment)
+               << (st.alignment == StageState::done ? (st.alignmentFromCache ? " (cached)" : " " + secs (st.alignmentSeconds)) : juce::String())
+               << "    Track Null Depth " << mark (st.trackNullDepth)
+               << (st.trackNullDepth == StageState::done ? " " + secs (st.nullDepthSeconds) : juce::String());
+
+        juce::String timing;
+        if (st.timeToOriginal >= 0.0)
+            timing << "    A playable after " << secs (st.timeToOriginal);
+        if (st.timeToStems >= 0.0)
+            timing << ", B after " << secs (st.timeToStems);
+
+        lines.add ("Status:  " + st.progress + timing);
+        lines.add ("         " + stages);
+    }
+
+    if (st.notice.isNotEmpty())
+        lines.add ("Note:  " + st.notice);
 
     if (st.hasAlignment)
         lines.add ("Alignment Offset:  " + withThousands (st.offsetSamples) + " samples,  polarity "
                    + (st.polarity < 0 ? "-1 (inverted)" : "+1") + ",  confidence " + juce::String (st.confidence, 4)
+                   + (st.alignmentFromCache ? "  (cached, re-measuring)" : "")
                    + (st.lowConfidence ? "    LOW CONFIDENCE - check by ear" : ""));
 
     if (st.hasTrackNullDepth)
@@ -532,16 +574,27 @@ void MainComponent::updateMixButtons()
     const bool residual = engine.getListenMode() == ListenMode::Residual;
     const float x = engine.getCrossfade();
 
+    // Until the Stems and the Alignment arrive only A exists: B, R, the Crossfade and Mute/Solo are disabled
+    // (the engine keeps them silent, then fades them in when the Session is upgraded).
+    const bool stems = engine.sessionHasStems();
+    stemControlsEnabled = stems;
+
     rButton.setToggleState (residual, juce::dontSendNotification);
     aButton.setToggleState (! residual && x <= 0.0f, juce::dontSendNotification);
     bButton.setToggleState (! residual && x >= 1.0f, juce::dontSendNotification);
-    crossfadeSlider.setEnabled (! residual);
-    crossfadeSlider.setAlpha (residual ? 0.4f : 1.0f);
+    bButton.setEnabled (stems);
+    rButton.setEnabled (stems);
+    crossfadeSlider.setEnabled (stems && ! residual);
+    crossfadeSlider.setAlpha (stems && ! residual ? 1.0f : 0.4f);
 
     for (int i = 0; i < Session::numStems; ++i)
     {
-        stemRows[(size_t) i].mute.setToggleState (engine.isStemMuted (i), juce::dontSendNotification);
-        stemRows[(size_t) i].solo.setToggleState (engine.isStemSoloed (i), juce::dontSendNotification);
+        auto& row = stemRows[(size_t) i];
+        row.mute.setToggleState (engine.isStemMuted (i), juce::dontSendNotification);
+        row.solo.setToggleState (engine.isStemSoloed (i), juce::dontSendNotification);
+        row.mute.setEnabled (stems);
+        row.solo.setEnabled (stems);
+        row.name.setAlpha (stems ? 1.0f : 0.4f);
     }
 }
 
@@ -606,6 +659,11 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
     if (code == juce::KeyPress::homeKey)       { engine.seek (0); return true; }
 
     const auto c = juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) code);
+
+    // B, R, the Crossfade and Mute/Solo wait for the Stems (see updateMixButtons()).
+    if (! stemControlsEnabled && (c == 'B' || c == 'R' || c == 'C' || (c >= '1' && c <= '4')
+                                  || juce::String ("!@#$").indexOfChar (c) >= 0))
+        return true;
 
     switch (c)
     {

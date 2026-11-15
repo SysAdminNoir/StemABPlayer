@@ -5,6 +5,8 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include "common/Cancel.h"
+
 namespace stemab
 {
 
@@ -15,9 +17,15 @@ using StemBuffers = std::array<juce::AudioBuffer<float>, 4>;
 /** Tuning for measureAlignment(). The defaults are what the app uses; tests shrink the windows for speed. */
 struct AlignmentOptions
 {
-    int    windowSamples = 1 << 20;    // length of each measurement window (~23.8 s at 44.1 kHz); shrunk to A's length
-    double maxLagSeconds = 2.0;        // search range: offsets in [-maxLag, +maxLag]
+    int    windowSamples = 1 << 16;    // length of each measurement window (~1.5 s at 44.1 kHz); shrunk to A's length
+    double maxLagSeconds = 0.5;        // search range: offsets in [-maxLag, +maxLag]
     int    numWindows    = 3;          // windows wanted (at ~20 %, 50 %, 80 % of A, then fallbacks)
+
+    /** > 1: a coarse cross-correlation of A and the Stem Sum averaged over blocks of this many samples finds
+        candidate lags (FFT over the whole range), then the exact full-rate correlation is evaluated around the
+        best few candidates and its peak is taken - the result is still whole-sample exact.
+        1: one full-rate FFT over the whole lag range (the reference path). */
+    int    decimation    = 4;
 };
 
 /** One measurement window of measureAlignment(). */
@@ -31,6 +39,7 @@ struct WindowMeasure
     int    polarity = +1;          // sign of the correlation peak
     double correlation = 0.0;      // Pearson coefficient of A and the Stem Sum at lagSamples (signed, -1..1)
     double peakRatio = 0.0;        // |main peak| / |highest peak more than 100 samples away|; 0 = no other peak in range
+                                   // (with decimation > 1 measured on the coarse correlation; diagnostic only)
     double subSampleLag = 0.0;     // diagnostic only: parabolic interpolation of the peak (never applied)
 };
 
@@ -56,10 +65,12 @@ struct AlignmentResult
 
 /** Measures the Alignment Offset and polarity of the Stem Sum against the Original (ADR 0003).
 
-    Both A and the Stem Sum are downmixed to mono, (L+R)/2. Several windows of A (default ~2^20 samples at
-    ~20 %, 50 % and 80 % of the track; windows whose A or Stem Sum is below -60 dBFS RMS are skipped and
-    replaced by others at 35 %, 65 %, 10 %, 90 %) are cross-correlated against the Stem Sum with an FFT over
-    a +/-2 s lag range, at whole-sample precision. The polarity is the sign of the correlation peak.
+    Both A and the Stem Sum are downmixed to mono, (L+R)/2, inside the windows only. Several windows of A
+    (default 2^16 samples at ~20 %, 50 % and 80 % of the track; windows whose A or Stem Sum is below
+    -60 dBFS RMS are skipped and replaced by others at 35 %, 65 %, 10 %, 90 %) are cross-correlated against
+    the Stem Sum over a +/-0.5 s lag range (default), at whole-sample precision: a coarse FFT pass on
+    decimated audio, then the exact correlation around the best coarse candidates (see
+    AlignmentOptions::decimation). The polarity is the sign of the exact correlation peak.
 
     The final offset is the most common window lag (ties: the one nearest the median). Confidence and the
     low-confidence flag:
@@ -72,11 +83,14 @@ struct AlignmentResult
     Preconditions (the caller's job): A and the Stems share one sample rate, `sampleRate`. A and the Stems may
     differ in length; the shorter side is treated as zero beyond its end. Windows shrink to fit short files.
 
+    `cancel` is polled between windows; when it fires the result is { ok = false, error = "Cancelled." }.
+
     Offline: allocates and runs FFTs; call it on a worker thread, never on the audio thread. Never throws. */
 AlignmentResult measureAlignment (const juce::AudioBuffer<float>& original,
                                   const StemBuffers& stems,
                                   double sampleRate,
-                                  const AlignmentOptions& options = {});
+                                  const AlignmentOptions& options = {},
+                                  const CancelCheck& cancel = {});
 
 /** Puts the Stems on A's timeline: returns four buffers of `timelineLength` samples (A's length), each with
     the same channel count as its source, where

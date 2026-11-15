@@ -4,6 +4,7 @@
 #include <cmath>
 #include <complex>
 #include <limits>
+#include <memory>
 
 #include <juce_dsp/juce_dsp.h>
 
@@ -92,18 +93,92 @@ namespace
         return std::clamp (cov / std::sqrt (va * vb), -1.0, 1.0);
     }
 
+    /** Scratch buffers and the FFT for one measureAlignment() call (reused across its windows). */
+    struct Workspace
+    {
+        std::unique_ptr<juce::dsp::FFT> fft;
+        std::vector<float> a, b;            // full-rate mono window of A and the Stem Sum segment
+        std::vector<float> ad, bd;          // the same, decimated (coarse pass)
+        std::vector<float> fa, fb;          // FFT work areas
+        std::vector<double> exact;          // exact correlation per lag, NaN = not computed yet
+    };
+
+    /** c[j] = sum_n x[n] * y[n + j] for j in [0, y.size() - x.size()], left in fx[j]. fft.getSize() must be
+        >= y.size(); then n + j < y.size() <= fftSize, so nothing wraps around. */
+    void fftCorrelate (const juce::dsp::FFT& fft, const std::vector<float>& x, const std::vector<float>& y,
+                       std::vector<float>& fx, std::vector<float>& fy)
+    {
+        const int n = fft.getSize();
+        fx.assign ((size_t) n * 2, 0.0f);
+        fy.assign ((size_t) n * 2, 0.0f);
+        std::copy (x.begin(), x.end(), fx.begin());
+        std::copy (y.begin(), y.end(), fy.begin());
+
+        fft.performRealOnlyForwardTransform (fx.data(), true);
+        fft.performRealOnlyForwardTransform (fy.data(), true);
+
+        // C = conj(FX) * FY
+        auto* cx = reinterpret_cast<std::complex<float>*> (fx.data());
+        auto* cy = reinterpret_cast<std::complex<float>*> (fy.data());
+
+        for (int k = 0; k <= n / 2; ++k)
+            cx[k] = std::conj (cx[k]) * cy[k];
+
+        fft.performRealOnlyInverseTransform (fx.data());
+    }
+
+    /** sum x[i] * y[i], i < n, in double precision. */
+    double dot (const float* x, const float* y, int n) noexcept
+    {
+        double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+        int i = 0;
+
+        for (; i + 4 <= n; i += 4)
+        {
+            s0 += (double) x[i]     * (double) y[i];
+            s1 += (double) x[i + 1] * (double) y[i + 1];
+            s2 += (double) x[i + 2] * (double) y[i + 2];
+            s3 += (double) x[i + 3] * (double) y[i + 3];
+        }
+
+        for (; i < n; ++i)
+            s0 += (double) x[i] * (double) y[i];
+
+        return (s0 + s1) + (s2 + s3);
+    }
+
+    /** out[i] = sum of x[i*factor .. i*factor + factor - 1] (a box filter; A and B get exactly the same one). */
+    void decimateInto (const std::vector<float>& x, int factor, std::vector<float>& out)
+    {
+        const size_t n = x.size() / (size_t) factor;
+        out.resize (n);
+
+        for (size_t i = 0; i < n; ++i)
+        {
+            float s = 0.0f;
+            for (size_t t = 0; t < (size_t) factor; ++t)
+                s += x[i * (size_t) factor + t];
+            out[i] = s;
+        }
+    }
+
+    double ratioOf (double peakAbs, double secondAbs) noexcept
+    {
+        return secondAbs < 0.0 ? 0.0 : (secondAbs > 0.0 ? std::min (1.0e6, peakAbs / secondAbs) : 1.0e6);
+    }
+
     /** Measures one window: cross-correlates A[start, start+len) with B[start-maxLag, start+len+maxLag). */
     WindowMeasure measureWindow (const juce::AudioBuffer<float>& original,
                                  const juce::AudioBuffer<float>* const* stems, size_t numStems,
-                                 juce::int64 start, int length, int maxLag,
-                                 const juce::dsp::FFT& fft,
-                                 std::vector<float>& a, std::vector<float>& b,
-                                 std::vector<float>& fa, std::vector<float>& fb)
+                                 juce::int64 start, int length, int maxLag, int decimation,
+                                 Workspace& ws)
     {
         WindowMeasure w;
         w.start  = start;
         w.length = length;
 
+        auto& a = ws.a;
+        auto& b = ws.b;
         const juce::AudioBuffer<float>* originalList[] = { &original };
         monoSegment (originalList, 1, start, length, a);
         monoSegment (stems, numStems, start - maxLag, length + 2 * maxLag, b);
@@ -113,54 +188,156 @@ namespace
 
         w.used = true;
 
-        const int n = fft.getSize();
-        fa.assign ((size_t) n * 2, 0.0f);
-        fb.assign ((size_t) n * 2, 0.0f);
-        std::copy (a.begin(), a.end(), fa.begin());
-        std::copy (b.begin(), b.end(), fb.begin());
-
-        fft.performRealOnlyForwardTransform (fa.data(), true);
-        fft.performRealOnlyForwardTransform (fb.data(), true);
-
-        // c[j] = sum_n a[n] * b[n + j]  <=>  C = conj(FA) * FB. No circular wrap for j in [0, 2*maxLag]
-        // because n + j < length + 2*maxLag <= fftSize.
-        auto* ca = reinterpret_cast<std::complex<float>*> (fa.data());
-        auto* cb = reinterpret_cast<std::complex<float>*> (fb.data());
-
-        for (int k = 0; k <= n / 2; ++k)
-            ca[k] = std::conj (ca[k]) * cb[k];
-
-        fft.performRealOnlyInverseTransform (fa.data());
-        const float* c = fa.data();   // c[j], j = lag + maxLag
-
+        // c[j] = sum_n a[n] * b[n + j], j = lag + maxLag in [0, numLags).
         const int numLags = 2 * maxLag + 1;
         int peak = 0;
-        float peakAbs = -1.0f;
+        double peakValue = 0.0;
+        double neighbours[2] = { 0.0, 0.0 };   // |c| at peak - 1 and peak + 1 (when they exist)
 
-        for (int j = 0; j < numLags; ++j)
+        if (decimation <= 1)
         {
-            const float v = std::abs (c[j]);
-            if (v > peakAbs)
+            fftCorrelate (*ws.fft, a, b, ws.fa, ws.fb);
+            const float* c = ws.fa.data();
+
+            float peakAbs = -1.0f;
+            for (int j = 0; j < numLags; ++j)
             {
-                peakAbs = v;
-                peak = j;
+                const float v = std::abs (c[j]);
+                if (v > peakAbs)
+                {
+                    peakAbs = v;
+                    peak = j;
+                }
+            }
+
+            float secondAbs = -1.0f;
+            for (int j = 0; j < numLags; ++j)
+                if (std::abs (j - peak) > peakExclusion)
+                    secondAbs = std::max (secondAbs, std::abs (c[j]));
+
+            peakValue = c[peak];
+            w.peakRatio = ratioOf (peakAbs, secondAbs);
+
+            if (peak > 0 && peak < numLags - 1)
+            {
+                neighbours[0] = std::abs (c[peak - 1]);
+                neighbours[1] = std::abs (c[peak + 1]);
+            }
+        }
+        else
+        {
+            // Coarse pass: the same correlation on box-filtered, decimated audio, over the whole lag range.
+            const int d = decimation;
+            decimateInto (a, d, ws.ad);
+            decimateInto (b, d, ws.bd);
+            fftCorrelate (*ws.fft, ws.ad, ws.bd, ws.fa, ws.fb);
+            const float* cc = ws.fa.data();
+            const int numCoarse = (2 * maxLag) / d + 1;   // coarse k <-> full-rate j = k * d
+
+            // The best few coarse peaks (at least 2 coarse samples apart), highest first.
+            constexpr int maxCandidates = 3;
+            int candidates[maxCandidates] = {};
+            int numCandidates = 0;
+
+            for (int c = 0; c < maxCandidates; ++c)
+            {
+                int best = -1;
+                float bestAbs = -1.0f;
+
+                for (int k = 0; k < numCoarse; ++k)
+                {
+                    bool taken = false;
+                    for (int i = 0; i < numCandidates; ++i)
+                        taken = taken || std::abs (k - candidates[i]) <= 2;
+
+                    if (! taken && std::abs (cc[k]) > bestAbs)
+                    {
+                        bestAbs = std::abs (cc[k]);
+                        best = k;
+                    }
+                }
+
+                if (best < 0)
+                    break;
+
+                candidates[numCandidates++] = best;
+            }
+
+            float secondAbs = -1.0f;
+            const int coarseExclusion = std::max (1, peakExclusion / d);
+            for (int k = 0; k < numCoarse; ++k)
+                if (std::abs (k - candidates[0]) > coarseExclusion)
+                    secondAbs = std::max (secondAbs, std::abs (cc[k]));
+
+            w.peakRatio = ratioOf (std::abs (cc[candidates[0]]), secondAbs);
+
+            // Exact pass: the full-rate correlation around each candidate, following the slope if the maximum
+            // sits on the edge of the region (so a coarse estimate that is off by more than expected still
+            // lands on the true local peak). The largest |c| over all candidates wins.
+            ws.exact.assign ((size_t) numLags, std::numeric_limits<double>::quiet_NaN());
+
+            const auto exactAt = [&] (int j)
+            {
+                auto& v = ws.exact[(size_t) j];
+                if (std::isnan (v))
+                    v = dot (a.data(), b.data() + j, length);
+                return v;
+            };
+
+            const int radius = 2 * d;
+            double bestAbs = -1.0;
+
+            for (int i = 0; i < numCandidates; ++i)
+            {
+                int centre = candidates[i] * d;
+                int localPeak = std::clamp (centre, 0, numLags - 1);
+
+                for (int iteration = 0; iteration < 64; ++iteration)
+                {
+                    const int lo = std::max (0, centre - radius);
+                    const int hi = std::min (numLags - 1, centre + radius);
+                    double localAbs = -1.0;
+
+                    for (int j = lo; j <= hi; ++j)
+                    {
+                        const double v = std::abs (exactAt (j));
+                        if (v > localAbs)
+                        {
+                            localAbs = v;
+                            localPeak = j;
+                        }
+                    }
+
+                    const bool onInnerEdge = (localPeak == lo && lo > 0) || (localPeak == hi && hi < numLags - 1);
+                    if (! onInnerEdge)
+                        break;
+
+                    centre = localPeak;
+                }
+
+                if (std::abs (exactAt (localPeak)) > bestAbs)
+                {
+                    bestAbs = std::abs (exactAt (localPeak));
+                    peak = localPeak;
+                }
+            }
+
+            peakValue = exactAt (peak);
+
+            if (peak > 0 && peak < numLags - 1)
+            {
+                neighbours[0] = std::abs (exactAt (peak - 1));
+                neighbours[1] = std::abs (exactAt (peak + 1));
             }
         }
 
-        float secondAbs = -1.0f;
-        for (int j = 0; j < numLags; ++j)
-            if (std::abs (j - peak) > peakExclusion)
-                secondAbs = std::max (secondAbs, std::abs (c[j]));
-
         w.lagSamples = (juce::int64) (peak - maxLag);
-        w.polarity   = c[peak] < 0.0f ? -1 : +1;
-        w.peakRatio  = secondAbs < 0.0f ? 0.0
-                                        : (secondAbs > 0.0f ? std::min (1.0e6, (double) peakAbs / secondAbs) : 1.0e6);
+        w.polarity   = peakValue < 0.0 ? -1 : +1;
 
         w.subSampleLag = (double) w.lagSamples;
         if (peak > 0 && peak < numLags - 1)
         {
-            const double y0 = std::abs (c[peak - 1]), y1 = peakAbs, y2 = std::abs (c[peak + 1]);
+            const double y0 = neighbours[0], y1 = std::abs (peakValue), y2 = neighbours[1];
             const double denom = y0 - 2.0 * y1 + y2;
             if (denom < 0.0)
                 w.subSampleLag += std::clamp (0.5 * (y0 - y2) / denom, -0.5, 0.5);
@@ -186,7 +363,8 @@ namespace
 AlignmentResult measureAlignment (const juce::AudioBuffer<float>& original,
                                   const StemBuffers& stems,
                                   double sampleRate,
-                                  const AlignmentOptions& options)
+                                  const AlignmentOptions& options,
+                                  const CancelCheck& cancel)
 {
     AlignmentResult result;
 
@@ -216,14 +394,20 @@ AlignmentResult measureAlignment (const juce::AudioBuffer<float>& original,
     const int maxLag = (int) std::min (std::round (options.maxLagSeconds * sampleRate), 1.0e7);
     const int windowLen = (int) std::min<juce::int64> (options.windowSamples, lenA);
 
+    // Coarse pass only when the decimated window is still long enough to correlate meaningfully.
+    const int decimation = std::max (1, options.decimation) > 1 && windowLen / std::max (1, options.decimation) >= 256
+                               ? options.decimation : 1;
+
+    // The FFT must hold the (decimated) Stem Sum segment: windowLen + 2 * maxLag samples.
+    const juce::int64 segment = ((juce::int64) windowLen + 2 * (juce::int64) maxLag) / decimation;
     int order = 1;
-    while ((juce::int64 (1) << order) < (juce::int64) windowLen + 2 * (juce::int64) maxLag)
+    while ((juce::int64 (1) << order) < segment)
         ++order;
 
-    const juce::dsp::FFT fft (order);
+    Workspace ws;
+    ws.fft = std::make_unique<juce::dsp::FFT> (order);
 
     const juce::AudioBuffer<float>* stemList[] = { &stems[0], &stems[1], &stems[2], &stems[3] };
-    std::vector<float> a, b, fa, fb;
     std::vector<juce::int64> starts;
     int usedCount = 0;
     const int wanted = std::max (1, options.numWindows);
@@ -241,9 +425,16 @@ AlignmentResult measureAlignment (const juce::AudioBuffer<float>& original,
         if (std::find (starts.begin(), starts.end(), start) != starts.end())
             continue;   // short files: several fractions collapse onto the same window
 
+        if (isCancelled (cancel))
+        {
+            result = {};
+            result.error = "Cancelled.";
+            return result;
+        }
+
         starts.push_back (start);
         auto w = measureWindow (original, stemList, std::size (stemList), start, windowLen, maxLag,
-                                fft, a, b, fa, fb);
+                                decimation, ws);
         usedCount += w.used ? 1 : 0;
         result.windows.push_back (w);
     }

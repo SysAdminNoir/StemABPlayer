@@ -58,4 +58,15 @@ NullDepthResult computeNullDepth (const juce::AudioBuffer<float>& original,
                                   const StemBuffers& alignedStems,
                                   double sampleRate);
 
+/** The same for Stems NOT yet on A's timeline: Stem sample n + offsetSamples, times polarity, pairs with A's
+    sample n - exactly what alignStems (stems, offsetSamples, polarity, A's length) would produce, without
+    building the aligned copies. Bit-identical to computeNullDepth (original, alignStems (...), sampleRate).
+    `cancel` is polled once per second of audio; if it fires the result is all zeros (meaningless). */
+NullDepthResult computeNullDepth (const juce::AudioBuffer<float>& original,
+                                  const StemBuffers& stems,
+                                  juce::int64 offsetSamples,
+                                  int polarity,
+                                  double sampleRate,
+                                  const CancelCheck& cancel = {});
+
 } // namespace stemab

@@ -124,6 +124,7 @@ private:
 
     double clipShownUntilMs = 0.0;
     bool lastClipShown = false;
+    bool stemControlsEnabled = false;   // the playing session has Stems (B, R, Crossfade, Mute/Solo usable)
     bool focusInitialised = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

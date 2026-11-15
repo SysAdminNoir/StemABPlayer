@@ -3,9 +3,6 @@
 #include <cmath>
 
 #include "PlatformWindows.h"
-#include "analysis/Alignment.h"
-#include "analysis/NullDepth.h"
-#include "decode/Decode.h"
 
 namespace stemab
 {
@@ -23,35 +20,25 @@ namespace
     {
         return typeName == "Windows Audio";
     }
-}
 
-struct SessionLoader::SourceResult
-{
-    std::shared_ptr<const Session> session;
-    AlignmentResult alignment;
-    double trackNullDepthDb = 0.0;
-    double loadSeconds = 0.0;
-    juce::StringArray notes;
-};
+    juce::String signedSamples (juce::int64 v)      { return (v > 0 ? "+" : "") + juce::String (v); }
+}
 
 //==============================================================================
 SessionLoader::SessionLoader (juce::AudioDeviceManager& dm, PlaybackEngine& e)
-    : deviceManager (dm), engine (e)
+    : deviceManager (dm),
+      engine (e),
+      pairLoader ([] (PairLoader::Task task) { juce::MessageManager::callAsync (std::move (task)); }, &cache)
 {
-    weakSelf = this;   // created here, on the message thread; workers only copy it
+    pairLoader.onOriginalReady      = [this] (const auto& ev) { originalReady (ev); };
+    pairLoader.onStemsDecoded       = [this] (double seconds) { stemsDecoded (seconds); };
+    pairLoader.onStemsReady         = [this] (const auto& ev) { stemsReady (ev); };
+    pairLoader.onAlignmentCorrected = [this] (const auto& ev) { alignmentCorrected (ev); };
+    pairLoader.onTrackNullDepth     = [this] (const auto& ev) { trackNullDepthReady (ev); };
+    pairLoader.onFailed             = [this] (LoadStage stage, const juce::String& message) { failed (stage, message); };
 }
 
-SessionLoader::~SessionLoader()
-{
-    latestGeneration.store (-1);
-    pool.removeAllJobs (true, 30000);   // decode steps are not interruptible; wait for the current one
-}
-
-template <typename Fn>
-void SessionLoader::postToMessageThread (Fn&& fn)
-{
-    juce::MessageManager::callAsync (std::forward<Fn> (fn));
-}
+SessionLoader::~SessionLoader() = default;   // the PairLoader cancels and waits for its workers
 
 void SessionLoader::changed()
 {
@@ -62,140 +49,158 @@ void SessionLoader::changed()
 //==============================================================================
 void SessionLoader::load (const juce::File& original, const juce::File& stemFile)
 {
-    const int gen = ++generation;
-    latestGeneration.store (gen);
-    pool.removeAllJobs (true, 0);       // queued jobs go; a running one sees the new generation and stops
-
-    // Replace the previous pair: stop playing it and free its buffers before decoding the next one.
-    session.reset();
-    engine.setSession (nullptr);
-
+    // Instant feedback: names and stage states now, before any audio exists. The current pair keeps
+    // playing until the new Original is ready (originalReady() hands over with a fade).
+    const auto keepRate = status;
     status = {};
     status.originalName = original.getFileName();
     status.stemFileName = stemFile.getFileName();
     status.busy = true;
-    status.progress = "Decoding original...";
+    status.original = StageState::running;
+    status.stems = StageState::running;
+    status.alignment = StageState::idle;
+    status.trackNullDepth = StageState::idle;
+    status.sourceRate = keepRate.sourceRate;
+    status.deviceRate = keepRate.deviceRate;
+    status.rateState = keepRate.rateState;
+    status.rateNote = keepRate.rateNote;
+    updateProgress();
     changed();
 
-    pool.addJob ([this, gen, original, stemFile] { runDecodeJob (gen, original, stemFile); });
+    pairLoader.load (original, stemFile);
 }
 
-void SessionLoader::setProgress (int gen, const juce::String& text)
+void SessionLoader::updateProgress()
 {
-    postToMessageThread ([weak = weakSelf, gen, text]
-    {
-        if (auto* self = weak.get(); self != nullptr && gen == self->generation)
-        {
-            self->status.progress = text;
-            self->changed();
-        }
-    });
-}
+    if (status.error.isNotEmpty() && status.original != StageState::done)
+        status.progress = "Failed";
+    else if (status.original != StageState::done)
+        status.progress = "Decoding...";
+    else if (status.stems == StageState::failed || status.alignment == StageState::failed)
+        status.progress = "Original only (B unavailable)";
+    else if (status.alignment != StageState::done)
+        status.progress = "Original playable - Stems on the way...";
+    else
+        status.progress = "Ready";
 
-void SessionLoader::fail (int gen, const juce::String& message)
-{
-    postToMessageThread ([weak = weakSelf, gen, message]
-    {
-        if (auto* self = weak.get(); self != nullptr && gen == self->generation)
-        {
-            self->status.busy = false;
-            self->status.error = message;
-            self->status.progress = "Failed";
-            self->changed();
-        }
-    });
+    status.busy = status.original == StageState::running || status.stems == StageState::running
+               || status.alignment == StageState::running;
 }
 
 //==============================================================================
-// Worker thread
+// PairLoader callbacks (message thread, current generation only)
 
-void SessionLoader::runDecodeJob (int gen, juce::File originalFile, juce::File stemFile)
+void SessionLoader::originalReady (const PairLoader::OriginalReady& ev)
 {
-    const auto cancelled = [this, gen] { return latestGeneration.load() != gen; };
-    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    session = ev.session;
 
-    auto original = decodeOriginal (originalFile);
-    if (cancelled()) return;
-    if (! original.ok) { fail (gen, "Original: " + original.error); return; }
+    status.original = StageState::done;
+    status.originalReused = ev.sameOriginal;
+    status.timeToOriginal = ev.secondsSinceLoad;
+    status.decodeOriginalSeconds = ev.decodeSeconds;
+    status.sourceRate = session->sampleRate();
+    if (status.stems == StageState::done)
+        status.alignment = StageState::running;
 
-    setProgress (gen, "Decoding stem file...");
-    auto stems = decodeStemFile (stemFile);
-    if (cancelled()) return;
-    if (! stems.ok) { fail (gen, "Stem file: " + stems.error); return; }
+    // Native Rate first (the device restarts at the source rate if it accepts it), then hand the Session
+    // over: fade out the old pair, swap, fade in - at 0 for a new Original, in place for the same one.
+    lastDeviceIdentity = deviceIdentity();
+    applyRatePolicy (session->sampleRate());
+    engine.setSession (session, ev.sameOriginal ? Handover::continueAtPosition : Handover::continueFromStart);
 
-    auto result = std::make_shared<SourceResult>();
-    result->notes.addArray (original.notes);
-    result->notes.addArray (stems.notes);
-
-    const double rate = original.sampleRate;
-
-    if (! sameRate (stems.sampleRate, rate))
-    {
-        setProgress (gen, "Resampling Stems " + hz (stems.sampleRate) + " -> " + hz (rate) + "...");
-        for (auto& s : stems.stems)
-        {
-            s = resample (s, stems.sampleRate, rate);
-            if (cancelled()) return;
-        }
-        result->notes.add ("Stems resampled " + hz (stems.sampleRate) + " -> " + hz (rate) + " to match the Original");
-    }
-
-    setProgress (gen, "Measuring alignment...");
-    result->alignment = measureAlignment (original.audio, stems.stems, rate);
-    if (cancelled()) return;
-    if (! result->alignment.ok) { fail (gen, "Alignment failed: " + result->alignment.error); return; }
-
-    auto aligned = alignStems (stems.stems, result->alignment.offsetSamples, result->alignment.polarity,
-                               original.audio.getNumSamples());
-    stems.stems = {};   // free the unaligned Stems now
-
-    setProgress (gen, "Measuring Track Null Depth...");
-    result->trackNullDepthDb = computeNullDepth (original.audio, aligned, rate).trackNullDepthDb;
-    if (cancelled()) return;
-
-    result->session = Session::create (std::move (original.audio), std::move (aligned), rate);
-    if (result->session == nullptr) { fail (gen, "Invalid sample rate"); return; }
-
-    result->loadSeconds = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
-    result->notes.add ("Loaded in " + juce::String (result->loadSeconds, 2) + " s");
-
-    postToMessageThread ([weak = weakSelf, gen, result]
-    {
-        if (auto* self = weak.get())
-            self->sourceReady (gen, result);
-    });
+    updateRateStatus();
+    updateProgress();
+    changed();
 }
 
-//==============================================================================
-// Message thread
-
-void SessionLoader::sourceReady (int gen, std::shared_ptr<SourceResult> result)
+void SessionLoader::stemsDecoded (double seconds)
 {
-    if (gen != generation)
-        return;
+    status.stems = StageState::done;
+    status.decodeStemsSeconds = seconds;
+    status.alignment = status.original == StageState::done ? StageState::running : StageState::idle;
+    updateProgress();
+    changed();
+}
 
-    session = result->session;
-
-    const auto& al = result->alignment;
+void SessionLoader::setAlignment (const AlignmentResult& al)
+{
     status.hasAlignment = true;
     status.offsetSamples = al.offsetSamples;
     status.polarity = al.polarity;
     status.confidence = al.confidence;
     status.lowConfidence = al.lowConfidence;
+}
+
+void SessionLoader::stemsReady (const PairLoader::StemsReady& ev)
+{
+    if (session == nullptr || ! ev.session->sharesOriginalWith (*session))
+        return;   // not for the Original that is playing (cannot happen within one generation)
+
+    session = ev.session;
+    engine.upgradeSession (session);   // B and the Residual fade in; the playhead carries on
+
+    setAlignment (ev.alignment);
+    status.alignmentFromCache = ev.fromCache;
+    status.stems = StageState::done;
+    status.alignment = StageState::done;
+    status.trackNullDepth = StageState::running;
+    status.timeToStems = ev.secondsSinceLoad;
+    status.decodeStemsSeconds = ev.decodeSeconds;
+    status.alignmentSeconds = ev.alignmentSeconds;
+
+    updateProgress();
+    changed();
+}
+
+void SessionLoader::alignmentCorrected (const PairLoader::AlignmentCorrected& ev)
+{
+    if (session == nullptr || ! ev.session->sharesOriginalWith (*session))
+        return;
+
+    // A different offset is a jump in B: fade out, swap, fade back in at the same position.
+    session = ev.session;
+    engine.setSession (session, Handover::continueAtPosition);
+
+    setAlignment (ev.measured);
+    status.alignmentFromCache = false;
+    status.notice = "Cached Alignment Offset " + signedSamples (ev.cached.offsetSamples)
+                  + (ev.cached.polarity < 0 ? " (inverted)" : "") + " corrected to "
+                  + signedSamples (ev.measured.offsetSamples) + (ev.measured.polarity < 0 ? " (inverted)" : "")
+                  + " by re-measuring";
+
+    updateProgress();
+    changed();
+}
+
+void SessionLoader::trackNullDepthReady (const PairLoader::TrackNullDepth& ev)
+{
     status.hasTrackNullDepth = true;
-    status.trackNullDepthDb = result->trackNullDepthDb;
-    status.sourceRate = session->sampleRate();
-    status.loadSeconds = result->loadSeconds;
+    status.trackNullDepthDb = ev.trackNullDepthDb;
+    status.trackNullDepth = StageState::done;
+    status.timeToNullDepth = ev.secondsSinceLoad;
+    status.nullDepthSeconds = ev.seconds;
 
-    // Native Rate first (the device restarts at the source rate if it accepts it), then hand the Session
-    // over: the engine builds its output resampler only if the device still runs at another rate.
-    lastDeviceIdentity = deviceIdentity();
-    applyRatePolicy (session->sampleRate());
-    engine.setSession (session);
+    updateProgress();
+    changed();
+}
 
-    status.busy = false;
-    status.progress = "Ready";
-    updateRateStatus();
+void SessionLoader::failed (LoadStage stage, const juce::String& message)
+{
+    status.error = message;
+
+    switch (stage)
+    {
+        case LoadStage::original:
+            status.original = StageState::failed;
+            status.stems = status.stems == StageState::running ? StageState::idle : status.stems;
+            status.error << "  (the previous pair, if any, keeps playing)";
+            break;
+        case LoadStage::stems:          status.stems = StageState::failed; break;
+        case LoadStage::alignment:      status.alignment = StageState::failed; break;
+        case LoadStage::trackNullDepth: status.trackNullDepth = StageState::failed; break;
+    }
+
+    updateProgress();
     changed();
 }
 

@@ -2,6 +2,7 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 #include "analysis/Alignment.h"
@@ -411,6 +412,10 @@ TEST_CASE ("each real pair aligns with high confidence", "[analysis][alignment][
     REQUIRE (r.ok);
     CHECK_FALSE (r.lowConfidence);
 
+    // ADR 0003: every test pair aligns at exactly +6,522 samples, polarity +1, all windows agreeing.
+    CHECK (r.offsetSamples == 6522);
+    CHECK (r.polarity == 1);
+
     int used = 0;
     for (const auto& w : r.windows)
     {
@@ -419,8 +424,15 @@ TEST_CASE ("each real pair aligns with high confidence", "[analysis][alignment][
         ++used;
         CHECK (w.lagSamples == r.offsetSamples);
         CHECK (w.polarity == r.polarity);
+        CHECK (w.correlation > 0.999);
     }
-    CHECK (used >= 2);
+    CHECK (used == 3);
+
+    // The previous full-rate reference (3 x 2^20 windows, +/-2 s, one FFT each) agrees.
+    const auto reference = stemab::measureAlignment (original.audio, decoded.stems, original.sampleRate, { 1 << 20, 2.0, 3, 1 });
+    REQUIRE (reference.ok);
+    CHECK (reference.offsetSamples == r.offsetSamples);
+    CHECK (reference.polarity == r.polarity);
 
     const auto aligned = stemab::alignStems (decoded.stems, r.offsetSamples, r.polarity, original.audio.getNumSamples());
     const auto nd = stemab::computeNullDepth (original.audio, aligned, original.sampleRate);
@@ -429,4 +441,98 @@ TEST_CASE ("each real pair aligns with high confidence", "[analysis][alignment][
     WARN (pair.original << ": offset " << r.offsetSamples << ", polarity " << r.polarity
                         << ", confidence " << r.confidence << ", Track Null Depth " << nd.trackNullDepthDb
                         << " dB, least-squares gain " << nd.leastSquaresGain);
+}
+
+//==============================================================================
+TEST_CASE ("the coarse pass + exact refine finds what the full-rate FFT finds", "[analysis][alignment]")
+{
+    const auto offset = GENERATE (as<juce::int64> {}, 2112, -500, 7144, 0, 1, -3);
+    const int length = (int) (5.0 * fs);
+    const bool music = GENERATE (false, true);
+    const auto a = music ? musicLike (length, 20) : noise (length, 21);
+    const auto stems = splitAndDelay (a, offset);
+
+    auto exactOptions = fastOptions;
+    exactOptions.decimation = 1;
+    auto coarseOptions = fastOptions;
+    coarseOptions.decimation = 4;
+
+    const auto exact = stemab::measureAlignment (a, stems, fs, exactOptions);
+    const auto coarse = stemab::measureAlignment (a, stems, fs, coarseOptions);
+    checkRecovered (exact, offset, +1);
+    checkRecovered (coarse, offset, +1);
+
+    REQUIRE (exact.windows.size() == coarse.windows.size());
+    for (size_t i = 0; i < exact.windows.size(); ++i)
+    {
+        CHECK (coarse.windows[i].lagSamples == exact.windows[i].lagSamples);
+        CHECK (coarse.windows[i].polarity == exact.windows[i].polarity);
+        CHECK_THAT (coarse.windows[i].correlation, WithinAbs (exact.windows[i].correlation, 1.0e-9));
+    }
+}
+
+TEST_CASE ("default options: +/-0.5 s search, 2^16 windows, coarse decimation 4", "[analysis][alignment]")
+{
+    const stemab::AlignmentOptions defaults;
+    CHECK (defaults.windowSamples == 1 << 16);
+    CHECK (defaults.maxLagSeconds == 0.5);
+    CHECK (defaults.numWindows == 3);
+    CHECK (defaults.decimation == 4);
+
+    // A delay near the edge of the +/-0.5 s range is still found exactly; beyond it is flagged.
+    const auto a = musicLike ((int) (8.0 * fs), 22);
+    checkRecovered (stemab::measureAlignment (a, splitAndDelay (a, 22000), fs), 22000, +1);
+    checkRecovered (stemab::measureAlignment (a, splitAndDelay (a, -21000), fs), -21000, +1);
+}
+
+TEST_CASE ("alignment stops when cancelled", "[analysis][alignment]")
+{
+    const auto a = noise ((int) (5.0 * fs), 23);
+    const auto r = stemab::measureAlignment (a, splitAndDelay (a, 100), fs, fastOptions, [] { return true; });
+    CHECK_FALSE (r.ok);
+    CHECK (r.error == "Cancelled.");
+}
+
+TEST_CASE ("Track Null Depth of unaligned Stems + offset equals that of aligned Stems, bit for bit", "[analysis][nulldepth]")
+{
+    const auto offset = GENERATE (as<juce::int64> {}, 2112, -500, 0);
+    const int polarity = GENERATE (1, -1);
+    const auto a = musicLike ((int) (3.0 * fs), 24);
+    auto stems = splitAndDelay (noise ((int) (3.0 * fs), 25), offset, 3000);   // a residual that is not zero
+
+    const auto viaCopies = stemab::computeNullDepth (a, stemab::alignStems (stems, offset, polarity, a.getNumSamples()), fs);
+    const auto direct = stemab::computeNullDepth (a, stems, offset, polarity, fs);
+
+    CHECK (direct.trackNullDepthDb == viaCopies.trackNullDepthDb);
+    CHECK (direct.leastSquaresGain == viaCopies.leastSquaresGain);
+    CHECK (direct.gainMatchedNullDepthDb == viaCopies.gainMatchedNullDepthDb);
+    CHECK (direct.perSecondNullDepthDb == viaCopies.perSecondNullDepthDb);
+}
+
+// Hidden: run in Release with  StemAB_Tests "[.timing]"
+TEST_CASE ("alignment of a real pair takes at most 50 ms", "[.timing][realfiles]")
+{
+    const auto& pair = realPairs[0];
+    const auto originalFile = testDataFile ("Audio Files", pair.original);
+    const auto stemFile = testDataFile ("Stem Files", pair.stemFile);
+
+    if (! originalFile.existsAsFile() || ! stemFile.existsAsFile())
+        SKIP ("test files not present: " << pair.original);
+
+    const auto original = stemab::decodeOriginal (originalFile);
+    const auto decoded = stemab::decodeStemFile (stemFile);
+    REQUIRE (original.ok);
+    REQUIRE (decoded.ok);
+
+    double best = 1.0e9;
+    for (int i = 0; i < 5; ++i)
+    {
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const auto r = stemab::measureAlignment (original.audio, decoded.stems, original.sampleRate);
+        best = std::min (best, juce::Time::getMillisecondCounterHiRes() - t0);
+        REQUIRE (r.offsetSamples == 6522);
+    }
+
+    WARN ("measureAlignment: " << best << " ms");
+    CHECK (best <= 50.0);
 }

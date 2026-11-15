@@ -5,6 +5,11 @@
 #include <exception>
 #include <memory>
 #include <vector>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 
 extern "C"
 {
@@ -273,7 +278,9 @@ namespace
     class StreamDecoder
     {
     public:
-        bool open (const AVStream& stream, int streamNumber, juce::String& error)
+        /** `frameThreads` > 1 asks FFmpeg for frame threading (used only if the codec supports it; the output
+            is identical, frames are still returned in order). */
+        bool open (const AVStream& stream, int streamNumber, juce::String& error, int frameThreads = 1)
         {
             index = streamNumber;
             const auto* par = stream.codecpar;
@@ -307,6 +314,13 @@ namespace
             if (ret >= 0)
             {
                 context->pkt_timebase = stream.time_base;
+
+                if (frameThreads > 1 && (codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0)
+                {
+                    context->thread_count = frameThreads;
+                    context->thread_type = FF_THREAD_FRAME;
+                }
+
                 ret = avcodec_open2 (context.get(), codec, nullptr);
             }
 
@@ -346,15 +360,30 @@ namespace
 
             int ret = avcodec_send_packet (context.get(), packet);
 
+            // With frame threading the decoder may want its finished frames taken before it accepts more input.
+            for (int retries = 0; ret == AVERROR (EAGAIN) && retries < 64; ++retries)
+            {
+                if (! receiveAll (error))
+                    return false;
+
+                ret = avcodec_send_packet (context.get(), packet);
+            }
+
             if (ret < 0 && ! (packet == nullptr && ret == AVERROR_EOF))
             {
                 error = "Decode error in stream " + juce::String (index) + ": " + avErrorString (ret);
                 return false;
             }
 
+            return receiveAll (error);
+        }
+
+        /** Appends every frame the decoder has ready. */
+        bool receiveAll (juce::String& error)
+        {
             for (;;)
             {
-                ret = avcodec_receive_frame (context.get(), frame.get());
+                const int ret = avcodec_receive_frame (context.get(), frame.get());
 
                 if (ret == AVERROR (EAGAIN) || ret == AVERROR_EOF)
                     return true;
@@ -464,7 +493,14 @@ namespace
     PacketPtr makePacket() { return PacketPtr (av_packet_alloc()); }
 
     // ---------------------------------------------------------------------------------------------
-    DecodedOriginal decodeOriginalImpl (const juce::File& file)
+    const char* const cancelledMessage = "Cancelled.";
+
+    int frameThreadCount()
+    {
+        return (int) std::clamp (std::thread::hardware_concurrency(), 1u, 8u);
+    }
+
+    DecodedOriginal decodeOriginalImpl (const juce::File& file, const DecodeOptions& options)
     {
         DecodedOriginal result;
         FormatPtr format;
@@ -487,7 +523,7 @@ namespace
             if ((int) i != streamNumber)
                 format->streams[i]->discard = AVDISCARD_ALL;
 
-        if (! decoder.open (stream, streamNumber, result.error))
+        if (! decoder.open (stream, streamNumber, result.error, options.parallel ? frameThreadCount() : 1))
             return result;
 
         auto packet = makePacket();
@@ -500,6 +536,12 @@ namespace
 
         for (;;)
         {
+            if (isCancelled (options.cancel))
+            {
+                result.error = cancelledMessage;
+                return result;
+            }
+
             const int ret = av_read_frame (format.get(), packet.get());
 
             if (ret == AVERROR_EOF)
@@ -540,7 +582,233 @@ namespace
     }
 
     // ---------------------------------------------------------------------------------------------
-    DecodedStems decodeStemFileImpl (const juce::File& file)
+    //==========================================================================
+    /** Bounded FIFO of demuxed packets for one decoder thread. The demuxer blocks while it is full, the decoder
+        while it is empty; abort() wakes both for good. */
+    class PacketQueue
+    {
+    public:
+        static constexpr size_t capacity = 256;   // ~6 s of AAC per Stem: bounded, yet never the bottleneck
+
+        /** Blocks while full. False if aborted (the packet is dropped). */
+        bool push (PacketPtr packet)
+        {
+            std::unique_lock lock (mutex);
+            notFull.wait (lock, [this] { return aborted || queue.size() < capacity; });
+
+            if (aborted)
+                return false;
+
+            queue.push_back (std::move (packet));
+            notEmpty.notify_one();
+            return true;
+        }
+
+        /** Blocks while empty and open. nullptr at the end of the stream or after abort(). */
+        PacketPtr pop()
+        {
+            std::unique_lock lock (mutex);
+            notEmpty.wait (lock, [this] { return aborted || closed || ! queue.empty(); });
+
+            if (aborted || queue.empty())
+                return {};
+
+            auto p = std::move (queue.front());
+            queue.pop_front();
+            notFull.notify_one();
+            return p;
+        }
+
+        void close()    { const std::lock_guard lock (mutex); closed = true; notEmpty.notify_all(); }
+        void abort()    { const std::lock_guard lock (mutex); aborted = true; notEmpty.notify_all(); notFull.notify_all(); }
+
+    private:
+        std::mutex mutex;
+        std::condition_variable notEmpty, notFull;
+        std::deque<PacketPtr> queue;
+        bool closed = false, aborted = false;
+    };
+
+    /** One demux pass over `format`, every Stem packet decoded by decoders[streamToStem[stream]], then each
+        decoder flushed. Sequential: all on this thread. Parallel: this thread demuxes into one bounded queue
+        per Stem and a thread per Stem decodes it. Either way every decoder sees exactly the same packets in
+        the same order, so the output is bit-identical. */
+    bool demuxAndDecodeStems (AVFormatContext& format, std::array<StreamDecoder, numStems>& decoders,
+                              const std::vector<int>& streamToStem, const juce::File& file,
+                              const DecodeOptions& options, juce::String& error)
+    {
+        const auto stemOf = [&streamToStem] (const AVPacket& p)
+        {
+            return p.stream_index >= 0 && (size_t) p.stream_index < streamToStem.size()
+                       ? streamToStem[(size_t) p.stream_index] : -1;
+        };
+
+        auto packet = makePacket();
+
+        if (packet == nullptr)
+        {
+            error = "Out of memory.";
+            return false;
+        }
+
+        if (! options.parallel)
+        {
+            for (;;)
+            {
+                if (isCancelled (options.cancel))
+                {
+                    error = cancelledMessage;
+                    return false;
+                }
+
+                const int ret = av_read_frame (&format, packet.get());
+
+                if (ret == AVERROR_EOF)
+                    break;
+
+                if (ret < 0)
+                {
+                    error = "Read error in \"" + file.getFileName() + "\": " + avErrorString (ret);
+                    return false;
+                }
+
+                const int stem = stemOf (*packet);
+                const bool ok = stem < 0 || decoders[(size_t) stem].decode (packet.get(), error);
+                av_packet_unref (packet.get());
+
+                if (! ok)
+                    return false;
+            }
+
+            for (auto& d : decoders)
+                if (! d.decode (nullptr, error))
+                    return false;
+
+            return true;
+        }
+
+        // Parallel: demux here, decode on four threads.
+        std::array<PacketQueue, numStems> queues;
+        std::array<juce::String, numStems> decodeErrors;
+        std::atomic<bool> failed { false };
+
+        const auto abortAll = [&]
+        {
+            failed.store (true);
+            for (auto& q : queues)
+                q.abort();
+        };
+
+        juce::String demuxError;
+
+        {
+            std::array<std::jthread, numStems> workers;   // joined at the end of this scope
+
+            for (size_t s = 0; s < (size_t) numStems; ++s)
+            {
+                workers[s] = std::jthread ([&, s]
+                {
+                    try
+                    {
+                        while (auto p = queues[s].pop())
+                        {
+                            if (! decoders[s].decode (p.get(), decodeErrors[s]))
+                            {
+                                abortAll();
+                                return;
+                            }
+                        }
+
+                        if (! failed.load() && ! decoders[s].decode (nullptr, decodeErrors[s]))
+                            abortAll();
+                    }
+                    catch (const std::exception& e)
+                    {
+                        decodeErrors[s] = "Decoding failed: " + juce::String (e.what());
+                        abortAll();
+                    }
+                });
+            }
+
+            try
+            {
+                for (;;)
+                {
+                    if (failed.load())
+                        break;
+
+                    if (isCancelled (options.cancel))
+                    {
+                        demuxError = cancelledMessage;
+                        abortAll();
+                        break;
+                    }
+
+                    const int ret = av_read_frame (&format, packet.get());
+
+                    if (ret == AVERROR_EOF)
+                        break;
+
+                    if (ret < 0)
+                    {
+                        demuxError = "Read error in \"" + file.getFileName() + "\": " + avErrorString (ret);
+                        abortAll();
+                        break;
+                    }
+
+                    const int stem = stemOf (*packet);
+
+                    if (stem < 0)
+                    {
+                        av_packet_unref (packet.get());
+                        continue;
+                    }
+
+                    PacketPtr owned (av_packet_alloc());
+
+                    if (owned == nullptr)
+                    {
+                        av_packet_unref (packet.get());
+                        demuxError = "Out of memory.";
+                        abortAll();
+                        break;
+                    }
+
+                    av_packet_move_ref (owned.get(), packet.get());
+
+                    if (! queues[(size_t) stem].push (std::move (owned)))
+                        break;   // a decoder failed
+                }
+            }
+            catch (const std::exception& e)
+            {
+                demuxError = "Decoding failed: " + juce::String (e.what());
+                abortAll();
+            }
+
+            for (auto& q : queues)
+                q.close();
+        }
+
+        if (demuxError.isNotEmpty())
+        {
+            error = demuxError;
+            return false;
+        }
+
+        for (const auto& e : decodeErrors)
+        {
+            if (e.isNotEmpty())
+            {
+                error = e;
+                return false;
+            }
+        }
+
+        return ! failed.load();
+    }
+
+    DecodedStems decodeStemFileImpl (const juce::File& file, const DecodeOptions& options)
     {
         DecodedStems result;
         FormatPtr format;
@@ -590,46 +858,14 @@ namespace
             }
         }
 
-        auto packet = makePacket();
-
-        if (packet == nullptr)
-        {
-            result.error = "Out of memory.";
+        // One demux pass feeding all four decoders (on their own threads unless options.parallel is false).
+        if (! demuxAndDecodeStems (*format, decoders, streamToStem, file, options, result.error))
             return result;
-        }
-
-        // One demux pass feeding all four decoders.
-        for (;;)
-        {
-            const int ret = av_read_frame (format.get(), packet.get());
-
-            if (ret == AVERROR_EOF)
-                break;
-
-            if (ret < 0)
-            {
-                result.error = "Read error in \"" + file.getFileName() + "\": " + avErrorString (ret);
-                return result;
-            }
-
-            const int stem = packet->stream_index >= 0 && (size_t) packet->stream_index < streamToStem.size()
-                                ? streamToStem[(size_t) packet->stream_index] : -1;
-            const bool ok = stem < 0 || decoders[(size_t) stem].decode (packet.get(), result.error);
-            av_packet_unref (packet.get());
-
-            if (! ok)
-                return result;
-        }
 
         juce::int64 longest = 0;
 
-        for (auto& d : decoders)
-        {
-            if (! d.decode (nullptr, result.error))
-                return result;
-
+        for (const auto& d : decoders)
             longest = juce::jmax (longest, d.getLength());
-        }
 
         if (longest == 0)
         {
@@ -672,11 +908,11 @@ namespace
     }
 }
 
-DecodedOriginal decodeOriginal (const juce::File& file)
+DecodedOriginal decodeOriginal (const juce::File& file, const DecodeOptions& options)
 {
     try
     {
-        return decodeOriginalImpl (file);
+        return decodeOriginalImpl (file, options);
     }
     catch (const std::exception& e)   // e.g. std::bad_alloc: nothing may propagate across the API
     {
@@ -686,11 +922,11 @@ DecodedOriginal decodeOriginal (const juce::File& file)
     }
 }
 
-DecodedStems decodeStemFile (const juce::File& file)
+DecodedStems decodeStemFile (const juce::File& file, const DecodeOptions& options)
 {
     try
     {
-        return decodeStemFileImpl (file);
+        return decodeStemFileImpl (file, options);
     }
     catch (const std::exception& e)
     {

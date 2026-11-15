@@ -105,7 +105,7 @@ void startSettled (PlaybackEngine& e, std::shared_ptr<const Session> s)
 }
 
 float A (const Session& s, int ch, juce::int64 n)          { return s.original().getSample (ch, (int) n); }
-float St (const Session& s, int k, int ch, juce::int64 n)  { return s.stem (k).getSample (ch, (int) n); }
+float St (const Session& s, int k, int ch, juce::int64 n)  { return s.stemChannel (k, ch)[n]; }
 
 /** Sum of the given Stems, in the engine's order (Drums, Bass, Other, Vocals). */
 float stemSum (const Session& s, std::array<bool, 4> audible, int ch, juce::int64 n)
@@ -709,5 +709,267 @@ TEST_CASE ("Device edge cases: extra channels, no session, null pointers, rate m
         // 4800 device samples at 48 kHz = 100 ms = about 4410 source samples (plus the resampler's look-ahead).
         CHECK (e.getPlayheadSample() >= 4410);
         CHECK (e.getPlayheadSample() < 4410 + (juce::int64) std::ceil (e.getResamplerLatencySeconds() * rate) + 200);
+    }
+}
+
+//==============================================================================
+namespace
+{
+/** An Original-only session and its upgrade with `stems` (aligned, offset 0): both share one A buffer. */
+std::pair<std::shared_ptr<const Session>, std::shared_ptr<const Session>> originalThenUpgrade (int length, Gen a, std::array<Gen, 4> stems)
+{
+    const auto full = makeSession (length, std::move (a), std::move (stems));
+    const auto aOnly = Session::originalOnlyOf (*full);
+    return { aOnly, Session::withStems (*aOnly, full->decodedStems(), 0, +1) };
+}
+} // namespace
+
+TEST_CASE ("Session without Stems: A plays, B and the Residual are silent", "[engine][session][upgrade]")
+{
+    const auto sessions = originalThenUpgrade (100000, sine (440.0, 0.5f), { sine (440.0, 0.25f), nullptr, nullptr, nullptr });
+    const auto aOnly = sessions.first;
+    PlaybackEngine e;
+    startSettled (e, aOnly);
+    CHECK_FALSE (e.sessionHasStems());
+
+    SECTION ("A (x = 0) is exactly A")
+    {
+        const Session& S = *aOnly;
+        checkSteady (e, [&] (int ch, juce::int64 n) { return A (S, ch, n); }, 0.0f);
+    }
+
+    SECTION ("B (x = 1) is silence, the transport still runs")
+    {
+        e.setCrossfade (1.0f);
+        render (e, 2048);
+        const auto p0 = e.getPlayheadSample();
+        const auto o = render (e, 4096);
+        CHECK (std::all_of (o.l.begin(), o.l.end(), [] (float x) { return x == 0.0f; }));
+        CHECK (e.isPlaying());
+        CHECK (e.getPlayheadSample() == p0 + 4096);
+    }
+
+    SECTION ("the Residual is silence, not A")
+    {
+        e.setListenMode (ListenMode::Residual);
+        render (e, 2048);
+        const auto o = render (e, 4096);
+        CHECK (std::all_of (o.l.begin(), o.l.end(), [] (float x) { return x == 0.0f; }));
+    }
+}
+
+TEST_CASE ("Session upgrade: playhead and play state carry on, B and R fade in without a click", "[engine][session][upgrade]")
+{
+    // A = 0.5 sine; one Stem = 0.25 of the same sine, so B = 0.25 sine and the Residual = 0.25 sine.
+    auto sessions = originalThenUpgrade (200000, sine (440.0, 0.5f), { sine (440.0, 0.25f), nullptr, nullptr, nullptr });
+    const auto full = sessions.second;
+    const Session& S = *full;
+
+    PlaybackEngine e;
+    std::weak_ptr<const Session> weakAOnly = sessions.first;
+    startSettled (e, std::move (sessions.first));
+
+    SECTION ("listening to A: not a single sample changes across the upgrade")
+    {
+        const auto p0 = e.getPlayheadSample();
+        e.upgradeSession (full);
+        checkSteady (e, [&] (int ch, juce::int64 n) { return A (S, ch, n); }, 0.0f, 8192);
+        CHECK (e.getPlayheadSample() == p0 + 8192);
+        CHECK (e.isPlaying());
+        CHECK (e.sessionHasStems());
+    }
+
+    for (const bool residual : { false, true })
+    {
+        DYNAMIC_SECTION ((residual ? "listening to R" : "listening to B") << ": silence, then a click-free fade-in")
+        {
+            if (residual)
+                e.setListenMode (ListenMode::Residual);
+            else
+                e.setCrossfade (1.0f);
+
+            render (e, 2048);   // gain ramps settle; still silent without Stems
+            const auto p0 = e.getPlayheadSample();
+            const auto before = render (e, 1024);
+            CHECK (std::all_of (before.l.begin(), before.l.end(), [] (float x) { return x == 0.0f; }));
+
+            e.upgradeSession (full);
+            const auto fade = render (e, 4096);
+
+            CHECK (e.isPlaying());
+            CHECK (e.getPlayheadSample() == p0 + 1024 + 4096);   // no jump, no restart
+            CHECK (std::abs (fade.l.front()) < 0.01f);              // starts from silence...
+            CHECK (maxJump (fade.l) < 0.02f);                       // ...and ramps without a step (sine slope ~0.016)
+            CHECK (maxJump (fade.r) < 0.02f);
+
+            // After stemsFadeSeconds the output is exactly B (or exactly the Residual): 0.25 sine.
+            const int fadeLen = (int) std::lround (PlaybackEngine::stemsFadeSeconds * rate);
+            const auto p1 = p0 + 1024;
+            int bad = 0;
+            for (int i = fadeLen + 1; i < 4096; ++i)
+            {
+                const float want = residual ? A (S, 0, p1 + i) - St (S, 0, 0, p1 + i) : St (S, 0, 0, p1 + i);
+                bad += fade.l[(size_t) i] == want ? 0 : 1;
+            }
+            CHECK (bad == 0);
+
+            // Halfway through the fade it is about half way up.
+            const int mid = fadeLen / 2;
+            const float full0 = residual ? A (S, 0, p1 + mid) - St (S, 0, 0, p1 + mid) : St (S, 0, 0, p1 + mid);
+            CHECK_THAT (fade.l[(size_t) mid], WithinAbs (0.5f * full0, 0.02));
+        }
+    }
+
+    SECTION ("paused: the upgrade keeps it paused at the same sample")
+    {
+        e.pause();
+        render (e, 2048);
+        const auto p0 = e.getPlayheadSample();
+        e.upgradeSession (full);
+        render (e, 2048);
+        CHECK_FALSE (e.isPlaying());
+        CHECK (e.getPlayheadSample() == p0);
+        CHECK (e.sessionHasStems());
+    }
+
+    // The Original-only session is retired and freed on the UI thread only.
+    render (e, block);
+    e.releaseRetiredSessions();
+    CHECK (weakAOnly.expired());
+}
+
+TEST_CASE ("Session upgrade edge cases: pending swap, stale upgrade", "[engine][session][upgrade]")
+{
+    SECTION ("an upgrade that arrives while the swap is still pending applies to the incoming session")
+    {
+        PlaybackEngine e;
+        startSettled (e, makeSession (100000, sine (1000.0, 0.5f), {}));
+        const auto sessions = originalThenUpgrade (50000, noise (1), { noise (2), nullptr, nullptr, nullptr });
+        e.setSession (sessions.first, Handover::continueFromStart);
+        e.upgradeSession (sessions.second);
+        render (e, 4096);
+        CHECK (e.getSessionLength() == 50000);
+        CHECK (e.sessionHasStems());
+        CHECK (e.isPlaying());
+    }
+
+    SECTION ("threaded: replace + upgrade back to back, many times, while the audio thread runs")
+    {
+        PlaybackEngine e;
+        e.prepare (rate, 256);
+        std::atomic<bool> stop { false };
+        std::atomic<int> blocks { 0 };
+
+        std::thread audio ([&]
+        {
+            std::vector<float> L (256), R (256);
+            float* chans[2] = { L.data(), R.data() };
+            while (! stop.load())
+            {
+                e.process (chans, 2, 256);
+                blocks.fetch_add (1);
+            }
+        });
+
+        std::vector<std::pair<std::shared_ptr<const Session>, std::shared_ptr<const Session>>> pairs;
+        for (int i = 0; i < 4; ++i)
+            pairs.push_back (originalThenUpgrade (3000 + 1000 * i, noise (i), { noise (20 + i), nullptr, nullptr, nullptr }));
+
+        e.play();
+        for (int i = 0; i < 300; ++i)
+        {
+            const auto& p = pairs[(size_t) i % pairs.size()];
+            e.setSession (p.first, Handover::continueFromStart);
+            e.upgradeSession (p.second);      // right behind it: must never be dropped as stale
+            e.releaseRetiredSessions();
+            const int target = blocks.load() + (i % 3);
+            while (blocks.load() < target) std::this_thread::yield();
+        }
+
+        const int target = blocks.load() + 20;
+        while (blocks.load() < target) std::this_thread::yield();
+        stop = true;
+        audio.join();
+
+        CHECK (e.getSessionLength() == 3000 + 1000 * (299 % 4));
+        CHECK (e.sessionHasStems());
+        e.releaseRetiredSessions();
+    }
+
+    SECTION ("an upgrade for another Original is dropped (and released)")
+    {
+        PlaybackEngine e;
+        const auto sessions = originalThenUpgrade (50000, noise (1), { noise (2), nullptr, nullptr, nullptr });
+        startSettled (e, sessions.first);
+
+        auto other = originalThenUpgrade (50000, noise (3), { noise (4), nullptr, nullptr, nullptr });
+        std::weak_ptr<const Session> weakOther = other.second;
+        e.upgradeSession (std::move (other.second));
+        other.first.reset();
+        const auto p0 = e.getPlayheadSample();
+        render (e, 1024);
+        CHECK_FALSE (e.sessionHasStems());
+        CHECK (e.getPlayheadSample() == p0 + 1024);
+        e.releaseRetiredSessions();
+        CHECK (weakOther.expired());
+    }
+}
+
+TEST_CASE ("Session handover: continue from 0 or at the same position, with a fade", "[engine][session][handover]")
+{
+    SECTION ("new Original while playing: fade out, swap, keep playing from 0")
+    {
+        PlaybackEngine e;
+        startSettled (e, makeSession (200000, sine (1000.0, 1.0f), {}));
+        render (e, 10000);
+
+        e.setSession (makeSession (50000, sine (500.0, 1.0f), {}), Handover::continueFromStart);
+        const auto o = render (e, 4096);
+        CHECK (e.isPlaying());
+        CHECK (e.getSessionLength() == 50000);
+        CHECK (e.getPlayheadSample() > 2048);
+        CHECK (e.getPlayheadSample() < 4096);
+        CHECK (maxJump (o.l) < 0.15f);
+    }
+
+    SECTION ("same Original: keeps playing at the same position")
+    {
+        PlaybackEngine e;
+        auto first = makeSession (200000, sine (1000.0, 1.0f), { sine (1000.0, 0.5f), nullptr, nullptr, nullptr });
+        startSettled (e, first);
+        render (e, 10000);
+        const auto p0 = e.getPlayheadSample();
+
+        e.setSession (Session::originalOnlyOf (*first), Handover::continueAtPosition);
+        const auto o = render (e, 4096);
+        CHECK (e.isPlaying());
+        CHECK_FALSE (e.sessionHasStems());
+        CHECK (e.getPlayheadSample() >= p0 + 4096 - 2 * e.getTransportFadeSamples() - block);
+        CHECK (e.getPlayheadSample() <= p0 + 4096);
+        CHECK (maxJump (o.l) < 0.15f);
+    }
+
+    SECTION ("paused: stays paused (at 0 for a new Original)")
+    {
+        PlaybackEngine e;
+        startSettled (e, makeSession (200000, sine (1000.0, 1.0f), {}));
+        e.pause();
+        render (e, 2048);
+        e.setSession (makeSession (50000, sine (500.0, 1.0f), {}), Handover::continueFromStart);
+        render (e, 2048);
+        CHECK_FALSE (e.isPlaying());
+        CHECK (e.getPlayheadSample() == 0);
+    }
+
+    SECTION ("Pause pressed during the swap fade is honoured")
+    {
+        PlaybackEngine e;
+        startSettled (e, makeSession (200000, sine (1000.0, 1.0f), {}));
+        e.setSession (makeSession (50000, sine (500.0, 1.0f), {}), Handover::continueFromStart);
+        render (e, 64);    // the swap fade has begun
+        e.pause();
+        render (e, 4096);
+        CHECK_FALSE (e.isPlaying());
+        CHECK (e.getPlayheadSample() == 0);
     }
 }

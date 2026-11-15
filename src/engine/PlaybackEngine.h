@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -17,6 +18,15 @@ class OutputResampler;
 
 /** What the listener hears (CONTEXT.md): the A<->B Crossfade, or the Residual (A - all four Stems). */
 enum class ListenMode { AB, Residual };
+
+/** What PlaybackEngine::setSession() does with the transport when the new session takes over. Whatever the
+    mode, a playing transport fades out before the swap. */
+enum class Handover
+{
+    pauseAtStart,         // paused, playhead at 0
+    continueFromStart,    // if it was playing: keeps playing from 0 (fade in); otherwise paused at 0
+    continueAtPosition    // if it was playing: keeps playing from the same sample (fade in); otherwise paused there
+};
 
 /** Meter taps. Every tap is stereo (channel 0 = L, 1 = R) and includes the transport fade, so a paused
     engine reads silence:
@@ -62,6 +72,9 @@ public:
     static constexpr double transportFadeSeconds = 0.010;
     /** Master Gain at or below this many dB is treated as -inf (silence). */
     static constexpr double masterGainFloorDb = -100.0;
+    /** When upgradeSession() adds the Stems to a playing session, B and the Residual fade in over this long
+        (linear, on top of their usual gains). */
+    static constexpr double stemsFadeSeconds = 0.020;
 
     PlaybackEngine();
     ~PlaybackEngine();
@@ -81,12 +94,19 @@ public:
     //==============================================================================
     // UI thread: session
 
-    /** Hands a session to the audio thread (nullptr clears it). On the swap the playhead goes to 0 and the
-        transport pauses; if audio is playing it fades out first. Sessions are only ever released on the UI
-        thread (here, in releaseRetiredSessions() or in the destructor), never on the audio thread.
-        If the session's rate differs from the prepared device rate, the output resampler it needs is built
-        here and handed over with it. */
-    void setSession (std::shared_ptr<const Session> session);
+    /** Hands a session to the audio thread (nullptr clears it). If audio is playing it fades out first; then
+        `handover` decides the transport (default: the playhead goes to 0 and the transport pauses). Sessions
+        are only ever released on the UI thread (here, in releaseRetiredSessions() or in the destructor),
+        never on the audio thread. If the session's rate differs from the prepared device rate, the output
+        resampler it needs is built here and handed over with it. */
+    void setSession (std::shared_ptr<const Session> session, Handover handover = Handover::pauseAtStart);
+
+    /** Swaps in `upgraded` - a session sharing the Original of the one playing (Session::withStems(), or a
+        corrected Alignment Offset) - without touching the transport: no fade, the playhead and play state
+        carry on. B and the Residual fade in over stemsFadeSeconds (they were silent without Stems). If a
+        setSession() swap is still pending, the upgrade applies to that incoming session instead. An upgrade
+        whose Original matches neither (stale) is dropped. */
+    void upgradeSession (std::shared_ptr<const Session> upgraded);
 
     /** Frees sessions and output resamplers the audio thread has finished with, and builds an output
         resampler the audio thread asked for (rare: a race between setSession() and a device restart).
@@ -145,6 +165,8 @@ public:
     /** Of the session the audio thread is playing (0 if none yet). */
     juce::int64 getSessionLength() const noexcept   { return sessionLength.load (std::memory_order_relaxed); }
     double getSessionSampleRate() const noexcept    { return sessionRate.load (std::memory_order_relaxed); }
+    /** True if the session the audio thread is playing has its Stems (B and the Residual are audible). */
+    bool sessionHasStems() const noexcept           { return sessionStems.load (std::memory_order_relaxed); }
     /** The rate passed to the last prepare(). */
     double getDeviceSampleRate() const noexcept     { return deviceRatePublished.load (std::memory_order_relaxed); }
     /** True while the mix goes through the realtime output resampler (device rate != mix rate). */
@@ -167,6 +189,7 @@ private:
     void beginFadeOut() noexcept;
     void resolveFadeOut() noexcept;
     void swapInIncomingSession() noexcept;
+    void takeUpgrade() noexcept;
     void retire (const Session*) noexcept;
     void publish (int numSamples) noexcept;
     juce::int64 effectiveLoopStart() const noexcept;
@@ -187,7 +210,9 @@ private:
 
     //==============================================================================
     // UI -> audio (atomics)
-    std::atomic<const Session*> pendingSession { nullptr };
+    // A const Session* with its Handover in the low two bits (Sessions are at least 8-byte aligned); 0 = none.
+    std::atomic<std::uintptr_t> pendingSession { 0 };
+    std::atomic<const Session*> pendingUpgrade { nullptr };
     std::atomic<int> transportCommand { 0 };        // 0 none, 1 play, 2 pause (last one wins)
     std::atomic<juce::int64> seekRequest { -1 };
     std::atomic<bool> loopEnabled { false };
@@ -209,6 +234,7 @@ private:
     std::atomic<bool> playingFlag { false };
     std::atomic<juce::int64> sessionLength { 0 };
     std::atomic<double> sessionRate { 0.0 };
+    std::atomic<bool> sessionStems { false };
     std::atomic<double> deviceRatePublished { 44100.0 };
     std::atomic<int> maxBlockPublished { 512 };
     std::atomic<double> mixRatePublished { 44100.0 };
@@ -245,6 +271,9 @@ private:
     const Session* current = nullptr;
     const Session* incoming = nullptr;      // taken from pendingSession, waiting for a fade-out
     bool swapPending = false;
+    const Session* heldUpgrade = nullptr;   // taken from pendingUpgrade, waiting for a pending replacement
+    Handover incomingHandover = Handover::pauseAtStart;
+    bool incomingResumes = false;           // continue* handover: play after the swap (was playing / Play pressed)
 
     juce::int64 pos = 0;                    // playhead
     bool running = false;                   // transport advancing
@@ -260,6 +289,7 @@ private:
     using Smoothed = juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>;
     Smoothed gainA, gainB, gainR, gainMaster;
     std::array<Smoothed, Session::numStems> gainStem;
+    Smoothed gainStemsPresent;              // 0 without Stems; ramps to 1 when an upgrade brings them (B and R only)
 
     // per-block meter accumulators
     std::array<std::array<float, 2>, numMeterTaps> blockPeak {};

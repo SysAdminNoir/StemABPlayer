@@ -24,11 +24,39 @@ namespace
 
         return out;
     }
+
+    /** Can `stems` be played in place: A's sample n -> Stem sample n + offset for every n < length? */
+    bool usableInPlace (const StemBuffers& stems, juce::int64 offset, int polarity, juce::int64 length) noexcept
+    {
+        if (polarity < 0 || offset < 0)
+            return false;
+
+        for (const auto& s : stems)
+            if (s.getNumChannels() != 2 || (juce::int64) s.getNumSamples() < offset + length)
+                return false;
+
+        return true;
+    }
 }
 
 std::shared_ptr<const Session> Session::create (juce::AudioBuffer<float> original,
                                                 StemBuffers alignedStems,
                                                 double sampleRate)
+{
+    auto s = createOriginalOnly (std::move (original), sampleRate);
+
+    if (s == nullptr)
+        return nullptr;
+
+    const int length = (int) s->length();
+
+    for (auto& stem : alignedStems)
+        stem = toStereoOfLength (std::move (stem), length);
+
+    return withStems (*s, std::make_shared<const StemBuffers> (std::move (alignedStems)), 0, +1);
+}
+
+std::shared_ptr<const Session> Session::createOriginalOnly (juce::AudioBuffer<float> original, double sampleRate)
 {
     if (! (sampleRate > 0.0))
         return nullptr;
@@ -36,12 +64,59 @@ std::shared_ptr<const Session> Session::create (juce::AudioBuffer<float> origina
     const int length = original.getNumSamples();
 
     std::shared_ptr<Session> s (new Session());
-    s->a = toStereoOfLength (std::move (original), length);
-
-    for (size_t i = 0; i < alignedStems.size(); ++i)
-        s->stems[i] = toStereoOfLength (std::move (alignedStems[i]), length);
-
+    s->a = std::make_shared<const juce::AudioBuffer<float>> (toStereoOfLength (std::move (original), length));
     s->rate = sampleRate;
+    return s;
+}
+
+std::shared_ptr<const Session> Session::originalOnlyOf (const Session& base)
+{
+    std::shared_ptr<Session> s (new Session());
+    s->a = base.a;
+    s->rate = base.rate;
+    return s;
+}
+
+std::shared_ptr<const Session> Session::withStems (const Session& base,
+                                                   std::shared_ptr<const StemBuffers> stems,
+                                                   juce::int64 offsetSamples,
+                                                   int polarity)
+{
+    if (stems == nullptr)
+        return nullptr;
+
+    std::shared_ptr<Session> s (new Session());
+    s->a = base.a;
+    s->rate = base.rate;
+    s->source = stems;
+    s->offset = offsetSamples;
+    s->polarity = polarity < 0 ? -1 : +1;
+
+    const juce::int64 length = base.length();
+    juce::int64 start = 0;
+
+    if (usableInPlace (*stems, offsetSamples, s->polarity, length))
+    {
+        s->storage = stems;
+        start = offsetSamples;
+    }
+    else
+    {
+        // Shift (and/or invert) once into stereo copies of A's length.
+        auto aligned = alignStems (*stems, offsetSamples, s->polarity, length);
+
+        for (auto& stem : aligned)
+            stem = toStereoOfLength (std::move (stem), (int) length);
+
+        s->storage = std::make_shared<const StemBuffers> (std::move (aligned));
+    }
+
+    for (size_t k = 0; k < (size_t) numStems; ++k)
+        for (int ch = 0; ch < 2; ++ch)
+            s->stemPointers[k][(size_t) ch] = (*s->storage)[k].getNumSamples() > 0
+                                                  ? (*s->storage)[k].getReadPointer (ch) + start
+                                                  : nullptr;
+
     return s;
 }
 

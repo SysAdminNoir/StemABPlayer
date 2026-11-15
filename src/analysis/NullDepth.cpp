@@ -1,6 +1,7 @@
 #include "analysis/NullDepth.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace stemab
@@ -32,7 +33,18 @@ NullDepthResult computeNullDepth (const juce::AudioBuffer<float>& original,
                                   const StemBuffers& alignedStems,
                                   double sampleRate)
 {
+    return computeNullDepth (original, alignedStems, 0, +1, sampleRate);
+}
+
+NullDepthResult computeNullDepth (const juce::AudioBuffer<float>& original,
+                                  const StemBuffers& stems,
+                                  juce::int64 offsetSamples,
+                                  int polarity,
+                                  double sampleRate,
+                                  const CancelCheck& cancel)
+{
     NullDepthResult result;
+    const float gain = polarity < 0 ? -1.0f : 1.0f;
 
     const int numCh  = original.getNumChannels();
     const int length = original.getNumSamples();
@@ -41,8 +53,22 @@ NullDepthResult computeNullDepth (const juce::AudioBuffer<float>& original,
 
     double energyA = 0.0, energyR = 0.0, crossAB = 0.0, energyB = 0.0;
 
+    // Stem s pairs its sample n + offset with A's sample n, for n in [from[s], to[s]) (zero elsewhere).
+    std::array<juce::int64, 4> from {}, to {};
+    for (size_t s = 0; s < stems.size(); ++s)
+    {
+        from[s] = std::max<juce::int64> (0, -offsetSamples);
+        to[s]   = std::max (from[s], (juce::int64) stems[s].getNumSamples() - offsetSamples);
+    }
+
     for (int blockStart = 0; blockStart < length; blockStart += blockLen)
     {
+        if (isCancelled (cancel))
+        {
+            result = {};
+            return result;
+        }
+
         const int blockEnd = std::min (length, blockStart + blockLen);
         double blockA = 0.0, blockR = 0.0;
 
@@ -51,16 +77,16 @@ NullDepthResult computeNullDepth (const juce::AudioBuffer<float>& original,
             const float* a = original.getReadPointer (ch);
             const float* stem[4] = {};
 
-            for (size_t s = 0; s < alignedStems.size(); ++s)
-                if (ch < alignedStems[s].getNumChannels())
-                    stem[s] = alignedStems[s].getReadPointer (ch);
+            for (size_t s = 0; s < stems.size(); ++s)
+                if (ch < stems[s].getNumChannels())
+                    stem[s] = stems[s].getReadPointer (ch);
 
             for (int n = blockStart; n < blockEnd; ++n)
             {
                 double bv = 0.0;
                 for (size_t s = 0; s < 4; ++s)
-                    if (stem[s] != nullptr && n < alignedStems[s].getNumSamples())
-                        bv += (double) stem[s][n];
+                    if (stem[s] != nullptr && n >= from[s] && n < to[s])
+                        bv += (double) (gain * stem[s][n + offsetSamples]);
 
                 const double av = (double) a[n];
                 const double rv = av - bv;

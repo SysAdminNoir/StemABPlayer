@@ -16,7 +16,8 @@ struct LiveNullDepth
 
 /** Live Null Depth: the Residual (A - all four Stems, Mute/Solo never enter) against A, over
     `windowSeconds` centred on `centreSample` (shifted to stay inside the track, shortened if the track is
-    shorter), all channels, accumulated in double precision.
+    shorter), all channels, accumulated in double precision. A Session without Stems (Original only)
+    gives { 0 dB, quiet = true }: there is no Residual yet.
 
     Pure function of the immutable Session: call it on the UI thread (it reads ~0.4 s of audio), never in the
     audio callback. An empty session gives { 0 dB, quiet = true }. */

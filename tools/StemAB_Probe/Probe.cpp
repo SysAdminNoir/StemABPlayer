@@ -13,9 +13,17 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include <condition_variable>
+#include <cstring>
+#include <deque>
+#include <mutex>
+#include <thread>
+
 #include "analysis/Alignment.h"
 #include "analysis/NullDepth.h"
 #include "decode/Decode.h"
+#include "engine/Session.h"
+#include "load/PairLoader.h"
 
 static_assert (std::is_same_v<stemab::StemBuffers, decltype (stemab::DecodedStems::stems)>,
                "Analysis and Decode must agree on the Stem buffer type");
@@ -56,6 +64,99 @@ namespace
     }
 
     double linearToDb (double g)   { return g > 0.0 ? 20.0 * std::log10 (g) : -999.0; }
+
+    bool buffersEqual (const juce::AudioBuffer<float>& x, const juce::AudioBuffer<float>& y)
+    {
+        if (x.getNumChannels() != y.getNumChannels() || x.getNumSamples() != y.getNumSamples())
+            return false;
+
+        for (int ch = 0; ch < x.getNumChannels(); ++ch)
+            if (std::memcmp (x.getReadPointer (ch), y.getReadPointer (ch), sizeof (float) * (size_t) x.getNumSamples()) != 0)
+                return false;
+
+        return true;
+    }
+
+    //==============================================================================
+    /** Owner-thread task queue for the PairLoader: the probe's main thread plays the message thread. */
+    class TaskQueue
+    {
+    public:
+        void push (stemab::PairLoader::Task task)
+        {
+            const std::lock_guard lock (mutex);
+            tasks.push_back (std::move (task));
+            ready.notify_one();
+        }
+
+        /** Runs one task, waiting up to `timeoutMs` for it. */
+        void runOne (int timeoutMs)
+        {
+            stemab::PairLoader::Task task;
+            {
+                std::unique_lock lock (mutex);
+                if (! ready.wait_for (lock, std::chrono::milliseconds (timeoutMs), [this] { return ! tasks.empty(); }))
+                    return;
+                task = std::move (tasks.front());
+                tasks.pop_front();
+            }
+            task();
+        }
+
+    private:
+        std::mutex mutex;
+        std::condition_variable ready;
+        std::deque<stemab::PairLoader::Task> tasks;
+    };
+
+    struct LoaderRun
+    {
+        double toOriginal = -1.0, toStems = -1.0, toNullDepth = -1.0, alignSeconds = 0.0;
+        bool fromCache = false, corrected = false;
+        stemab::AlignmentResult alignment;
+        juce::String error;
+    };
+
+    /** Loads the pair with a fresh PairLoader (as the app does) and reports what it measured. */
+    LoaderRun runLoader (const juce::File& originalFile, const juce::File& stemFile, stemab::AlignmentCache* cache)
+    {
+        TaskQueue queue;
+        LoaderRun run;
+        bool done = false;
+
+        stemab::PairLoader loader ([&queue] (stemab::PairLoader::Task t) { queue.push (std::move (t)); }, cache);
+        loader.onOriginalReady = [&] (const auto& ev) { run.toOriginal = ev.secondsSinceLoad; };
+        loader.onStemsReady = [&] (const auto& ev)
+        {
+            run.toStems = ev.secondsSinceLoad;
+            run.fromCache = ev.fromCache;
+            run.alignment = ev.alignment;
+            run.alignSeconds = ev.alignmentSeconds;
+        };
+        loader.onAlignmentCorrected = [&] (const auto&) { run.corrected = true; };
+        loader.onTrackNullDepth = [&] (const auto& ev) { run.toNullDepth = ev.secondsSinceLoad; done = true; };
+        loader.onFailed = [&] (stemab::LoadStage, const juce::String& message) { run.error = message; done = true; };
+
+        loader.load (originalFile, stemFile);
+
+        for (const auto deadline = Clock::now() + std::chrono::seconds (60); ! done && Clock::now() < deadline;)
+            queue.runOne (50);
+
+        return run;
+    }
+
+    void printLoaderRun (const char* label, const LoaderRun& r)
+    {
+        if (r.error.isNotEmpty())
+        {
+            std::printf ("  %s: FAILED: %s\n", label, r.error.toRawUTF8());
+            return;
+        }
+
+        std::printf ("  %s: A playable %.3f s, B ready %.3f s (offset %s%s), Track Null Depth %.3f s%s\n",
+                     label, r.toOriginal, r.toStems, signedGrouped (r.alignment.offsetSamples).c_str(),
+                     r.fromCache ? ", cached" : "", r.toNullDepth, r.corrected ? "  [cached offset corrected]" : "");
+    }
 
     /** DIAGNOSTIC ONLY (not part of the Analysis API): Null Depth after low-passing A and the Residual with
         the same 16th-order Butterworth at `cutoffHz`. Filtering is linear, so LP(A) - LP(B) = LP(A - B):
@@ -105,9 +206,27 @@ namespace
     {
         std::printf ("\n=== %s  <->  %s\n", originalFile.getFileName().toRawUTF8(), stemFile.getFileName().toRawUTF8());
 
+        // --- Stage timings: the reference (sequential) pipeline, then the fast one -----------------------
+        const stemab::DecodeOptions sequential { {}, false };
         auto t0 = Clock::now();
-        auto original = stemab::decodeOriginal (originalFile);
-        const double tOriginal = secondsSince (t0);
+        const auto refOriginal = stemab::decodeOriginal (originalFile, sequential);
+        const double tRefOriginal = secondsSince (t0);
+        t0 = Clock::now();
+        const auto refStems = stemab::decodeStemFile (stemFile, sequential);
+        const double tRefStems = secondsSince (t0);
+
+        // Fast: A and the Stem File decode concurrently, each with its own parallelism.
+        stemab::DecodedOriginal original;
+        stemab::DecodedStems decoded;
+        double tOriginal = 0.0, tStems = 0.0;
+        t0 = Clock::now();
+        {
+            std::thread a ([&] { const auto t = Clock::now(); original = stemab::decodeOriginal (originalFile); tOriginal = secondsSince (t); });
+            std::thread b ([&] { const auto t = Clock::now(); decoded = stemab::decodeStemFile (stemFile); tStems = secondsSince (t); });
+            a.join();
+            b.join();
+        }
+        const double tDecodeWall = secondsSince (t0);
 
         if (! original.ok)
         {
@@ -115,15 +234,14 @@ namespace
             return false;
         }
 
-        t0 = Clock::now();
-        auto decoded = stemab::decodeStemFile (stemFile);
-        const double tStems = secondsSince (t0);
-
         if (! decoded.ok)
         {
             std::printf ("Stem File: FAILED: %s\n", decoded.error.toRawUTF8());
             return false;
         }
+
+        const bool identical = refOriginal.ok && refStems.ok && buffersEqual (refOriginal.audio, original.audio)
+                            && std::equal (refStems.stems.begin(), refStems.stems.end(), decoded.stems.begin(), buffersEqual);
 
         const double fs = original.sampleRate;
         const auto lenA = (juce::int64) original.audio.getNumSamples();
@@ -160,6 +278,49 @@ namespace
             return false;
         }
 
+        // Reference: the previous defaults (3 x 2^20-sample windows, +/-2 s, one full-rate FFT each).
+        t0 = Clock::now();
+        const auto refAlign = stemab::measureAlignment (original.audio, stems, fs, { 1 << 20, 2.0, 3, 1 });
+        const double tRefAlign = secondsSince (t0);
+
+        // Session build: A only, then the upgrade with the Stems (zero-copy when the offset allows it).
+        // (Both copies are the probe's own; the loader moves the decoded buffers in.)
+        const auto aOnly = stemab::Session::createOriginalOnly (juce::AudioBuffer<float> (original.audio), fs);
+        const auto sharedStems = std::make_shared<const stemab::StemBuffers> (stems);
+        t0 = Clock::now();
+        const auto upgraded = stemab::Session::withStems (*aOnly, sharedStems, align.offsetSamples, align.polarity);
+        const double tUpgrade = secondsSince (t0);
+        juce::ignoreUnused (upgraded);
+
+        // Reference Track Null Depth path: aligned copies, then the null.
+        t0 = Clock::now();
+        const auto refNd = stemab::computeNullDepth (original.audio,
+                                                     stemab::alignStems (stems, align.offsetSamples, align.polarity, lenA), fs);
+        const double tRefNull = secondsSince (t0);
+
+        std::printf ("Stage timings (s)        reference  ->  now\n");
+        std::printf ("  decode Original         %6.3f   ->  %6.3f   (frame-threaded FLAC)\n", tRefOriginal, tOriginal);
+        std::printf ("  decode Stem File        %6.3f   ->  %6.3f   (4 decoder threads)\n", tRefStems, tStems);
+        std::printf ("  both decodes, wall      %6.3f   ->  %6.3f   (concurrent)\n", tRefOriginal + tRefStems, tDecodeWall);
+        std::printf ("  alignment               %6.3f   ->  %6.3f   (%s; same offset: %s)\n", tRefAlign, tAlign,
+                     "3 x 2^16, +/-0.5 s, coarse 1/4 + exact refine",
+                     refAlign.ok && refAlign.offsetSamples == align.offsetSamples && refAlign.polarity == align.polarity ? "yes" : "NO");
+        std::printf ("  Session with Stems              ->  %6.3f   (zero-copy: Stems shared, not shifted)\n", tUpgrade);
+        std::printf ("  parallel decode bit-identical to sequential: %s\n", identical ? "yes" : "NO");
+        juce::ignoreUnused (refNd, tRefNull);
+
+        // The real loader (PairLoader, the app's pipeline), cold and with a warm alignment cache.
+        const auto cacheFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("StemAB_Probe_cache.json");
+        cacheFile.deleteFile();
+        {
+            stemab::AlignmentCache cache (cacheFile);
+            const auto miss = runLoader (originalFile, stemFile, &cache);
+            const auto hit = runLoader (originalFile, stemFile, &cache);
+            printLoaderRun ("loader, cache miss", miss);
+            printLoaderRun ("loader, cache hit ", hit);
+        }
+        cacheFile.deleteFile();
+
         std::printf ("Alignment Offset: %s samples (%.2f ms), polarity %+d, confidence %.4f  %s   (%.2f s)\n",
                      signedGrouped (align.offsetSamples).c_str(), 1000.0 * (double) align.offsetSamples / fs,
                      align.polarity, align.confidence, align.lowConfidence ? "[LOW CONFIDENCE]" : "[ok]", tAlign);
@@ -183,11 +344,13 @@ namespace
 
         // --- Track Null Depth ---------------------------------------------------------------------------
         t0 = Clock::now();
-        const auto aligned = stemab::alignStems (stems, align.offsetSamples, align.polarity, lenA);
-        const auto nd = stemab::computeNullDepth (original.audio, aligned, fs);
+        const auto nd = stemab::computeNullDepth (original.audio, stems, align.offsetSamples, align.polarity, fs);
         const double tNull = secondsSince (t0);
+        const auto aligned = stemab::alignStems (stems, align.offsetSamples, align.polarity, lenA);   // for the diagnostics below
 
-        std::printf ("Track Null Depth: %.2f dB   (align + null %.2f s)\n", nd.trackNullDepthDb, tNull);
+        std::printf ("Track Null Depth: %.2f dB   (%.2f s, off the critical path; reference align + null %.2f s, %s)\n",
+                     nd.trackNullDepthDb, tNull, tRefNull,
+                     nd.trackNullDepthDb == refNd.trackNullDepthDb ? "identical" : "DIFFERENT");
         std::printf ("Least-squares gain <A,B>/<B,B> (diagnostic, NOT applied): %.5f (%+.3f dB); "
                      "gain-matched Null Depth would be %.2f dB\n",
                      nd.leastSquaresGain, linearToDb (nd.leastSquaresGain), nd.gainMatchedNullDepthDb);

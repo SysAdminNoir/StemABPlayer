@@ -529,6 +529,32 @@ TEST_CASE ("The audio thread never allocates, at the Native Rate or resampling",
         countAllocations = false;
 
         CHECK (allocationCount.load() == 0);
+
+        // A continue* handover and a Session upgrade (the Stems arrive) are taken on the audio thread, too.
+        {
+            const auto full = makeSession (44100 * 3, 44100.0, sineAt (1000.0, 44100.0, 0.5));
+            const auto aOnly = Session::originalOnlyOf (*full);
+            const auto upgraded = Session::withStems (*aOnly, full->decodedStems(), 0, +1);
+
+            e.setSession (aOnly, Handover::continueFromStart);
+            allocationCount = 0;
+            countAllocations = true;
+            for (int i = 0; i < 50; ++i)
+                e.process (chans, 2, 1 + (i * 53) % 512);
+            countAllocations = false;
+            CHECK (allocationCount.load() == 0);
+            CHECK (e.isPlaying());
+
+            e.upgradeSession (upgraded);
+            allocationCount = 0;
+            countAllocations = true;
+            for (int i = 0; i < 50; ++i)
+                e.process (chans, 2, 1 + (i * 53) % 512);
+            countAllocations = false;
+            CHECK (allocationCount.load() == 0);
+            CHECK (e.sessionHasStems());
+            e.releaseRetiredSessions();
+        }
     }
 
    #if defined (_MSC_VER) && defined (_DEBUG)

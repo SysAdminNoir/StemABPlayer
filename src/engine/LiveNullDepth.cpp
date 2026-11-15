@@ -12,7 +12,7 @@ LiveNullDepth measureLiveNullDepth (const Session& session, juce::int64 centreSa
     LiveNullDepth result;
 
     const juce::int64 len = session.length();
-    if (len <= 0 || ! (windowSeconds > 0.0))
+    if (len <= 0 || ! session.hasStems() || ! (windowSeconds > 0.0))
         return result;
 
     const juce::int64 window = juce::jlimit ((juce::int64) 1, len,

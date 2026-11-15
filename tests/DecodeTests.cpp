@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <atomic>
 #include <cmath>
+#include <cstring>
 #include <memory>
 
 #include "decode/Decode.h"
@@ -229,4 +231,86 @@ TEST_CASE ("a plain FLAC is not a Stem File", "[decode][realfiles]")
     CHECK_FALSE (r.ok);
     CHECK_THAT (r.error.toStdString(), Catch::Matchers::ContainsSubstring ("not a Stem File"));
     CHECK_THAT (r.error.toStdString(), Catch::Matchers::ContainsSubstring ("found 1"));
+}
+
+//==============================================================================
+namespace
+{
+    bool bitIdentical (const juce::AudioBuffer<float>& x, const juce::AudioBuffer<float>& y)
+    {
+        if (x.getNumChannels() != y.getNumChannels() || x.getNumSamples() != y.getNumSamples())
+            return false;
+
+        for (int ch = 0; ch < x.getNumChannels(); ++ch)
+            if (std::memcmp (x.getReadPointer (ch), y.getReadPointer (ch), sizeof (float) * (size_t) x.getNumSamples()) != 0)
+                return false;
+
+        return true;
+    }
+}
+
+TEST_CASE ("parallel decode is bit-identical to sequential decode", "[decode][realfiles][parallel]")
+{
+    const auto& pair = realPairs[0];
+    const auto originalFile = testDataFile ("Audio Files", pair.original);
+    const auto stemFile = testDataFile ("Stem Files", pair.stemFile);
+
+    if (! originalFile.existsAsFile() || ! stemFile.existsAsFile())
+        SKIP ("test files not present: " << pair.original);
+
+    const stemab::DecodeOptions sequential { {}, false }, parallel { {}, true };
+
+    SECTION ("Stem File: one demux pass, four decoder threads")
+    {
+        const auto seq = stemab::decodeStemFile (stemFile, sequential);
+        const auto par = stemab::decodeStemFile (stemFile, parallel);
+        REQUIRE (seq.ok);
+        REQUIRE (par.ok);
+        CHECK (par.sampleRate == seq.sampleRate);
+        CHECK (par.declaredLength == seq.declaredLength);
+        CHECK (par.notes == seq.notes);
+
+        for (int s = 0; s < stemab::numStems; ++s)
+        {
+            CAPTURE (s);
+            CHECK (bitIdentical (par.stems[(size_t) s], seq.stems[(size_t) s]));
+        }
+    }
+
+    SECTION ("Original: frame-threaded FLAC")
+    {
+        const auto seq = stemab::decodeOriginal (originalFile, sequential);
+        const auto par = stemab::decodeOriginal (originalFile, parallel);
+        REQUIRE (seq.ok);
+        REQUIRE (par.ok);
+        CHECK (par.sampleRate == seq.sampleRate);
+        CHECK (bitIdentical (par.audio, seq.audio));
+    }
+}
+
+TEST_CASE ("decoding stops early when cancelled", "[decode][realfiles]")
+{
+    const auto& pair = realPairs[0];
+    const auto originalFile = testDataFile ("Audio Files", pair.original);
+    const auto stemFile = testDataFile ("Stem Files", pair.stemFile);
+
+    if (! originalFile.existsAsFile() || ! stemFile.existsAsFile())
+        SKIP ("test files not present: " << pair.original);
+
+    // Cancel after a handful of polls: well before the end of the file.
+    for (const bool parallel : { false, true })
+    {
+        CAPTURE (parallel);
+        auto polls = std::make_shared<std::atomic<int>> (0);
+        const stemab::DecodeOptions options { [polls] { return polls->fetch_add (1) > 200; }, parallel };
+
+        const auto stems = stemab::decodeStemFile (stemFile, options);
+        CHECK_FALSE (stems.ok);
+        CHECK (stems.error == "Cancelled.");
+
+        polls->store (0);
+        const auto original = stemab::decodeOriginal (originalFile, options);
+        CHECK_FALSE (original.ok);
+        CHECK (original.error == "Cancelled.");
+    }
 }

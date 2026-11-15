@@ -40,6 +40,7 @@ target_link_libraries(StemAB_App
         StemAB_Engine
         StemAB_Analysis
         StemAB_Decode
+        StemAB_Load
         StemAB_JuceModules
         juce::juce_gui_extra
         juce::juce_audio_utils

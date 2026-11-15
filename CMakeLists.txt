@@ -139,6 +139,7 @@ set(STEMAB_ASIO_SDK_DIR "C:/Projects/SDKs/asiosdk" CACHE PATH
 add_subdirectory(src/engine)
 add_subdirectory(src/analysis)
 add_subdirectory(src/decode)
+add_subdirectory(src/load)
 add_subdirectory(src/app)
 add_subdirectory(tests)
 add_subdirectory(tools/StemAB_Probe)

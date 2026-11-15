@@ -5,6 +5,8 @@ add_executable(StemAB_Probe Probe.cpp)
 
 target_link_libraries(StemAB_Probe PRIVATE
     StemAB_Decode
+    StemAB_Engine
+    StemAB_Load
     StemAB_Analysis
     StemAB_JuceModules)
 
