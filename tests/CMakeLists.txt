@@ -2,6 +2,7 @@ include(Catch)   # from ${catch2_SOURCE_DIR}/extras (added to CMAKE_MODULE_PATH 
 
 add_executable(StemAB_Tests
     CrossfadeTests.cpp
+    PlaybackEngineTests.cpp
     DecodeTests.cpp
     ResampleTests.cpp
     AnalysisTests.cpp

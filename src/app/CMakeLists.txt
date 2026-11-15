@@ -9,11 +9,15 @@ target_sources(StemAB_App PRIVATE
     MainComponent.h
     PlatformWindows.cpp
     PlatformWindows.h
+    SessionLoader.cpp
+    SessionLoader.h
     Theme.h)
 
+# STEMAB_SOURCE_DIR: the file choosers open in the repo's "Audio Files/" and "Stem Files/" when present.
 target_compile_definitions(StemAB_App PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    STEMAB_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:StemAB_App,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:StemAB_App,JUCE_VERSION>")
 
