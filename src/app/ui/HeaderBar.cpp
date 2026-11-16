@@ -280,9 +280,26 @@ void HeaderBar::paint (juce::Graphics& g)
     g.drawText (scaleLabel, scaleLabelArea.translated (0, -theme::scaled (1.0f, s)), juce::Justification::centred, false);
 
     // Status line
+    // Right: when the groups do not all fit, drop whole groups from the front (Aligned, then Track null depth)
+    // so the rest is never cut mid-word; the tooltip / Details still carry everything.
     const auto row = statusRow.toFloat();
-    const float rightW = juce::jmin (segmentsWidth (rightStatus), row.getWidth() * 0.62f);
-    drawSegments (g, rightStatus, row.withLeft (row.getRight() - rightW), true);
+    const float maxRightW = row.getWidth() * 0.62f;
+    juce::Array<Segment> right (rightStatus);
+    while (segmentsWidth (right) > maxRightW)
+    {
+        int next = -1;
+        for (int i = 0; i < right.size(); ++i)
+            if (right.getReference (i).text.trim() == juce::String (juce::CharPointer_UTF8 ("\xc2\xb7")))
+            {
+                next = i + 1;   // the first segment after the first separator
+                break;
+            }
+        if (next < 0 || next >= right.size())
+            break;          // one group left: it is clipped (rare: a very narrow window)
+        right.removeRange (0, next);
+    }
+    const float rightW = juce::jmin (segmentsWidth (right), maxRightW);
+    drawSegments (g, right, row.withLeft (row.getRight() - rightW), true);
     drawSegments (g, leftStatus, row.withRight (row.getRight() - rightW - 16.0f * s), false);
 }
 

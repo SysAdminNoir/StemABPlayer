@@ -94,6 +94,7 @@ MainComponent::MainComponent()
                                                                                           : theme::PaletteId::standard);
     if (auto* lf = dynamic_cast<theme::StemLookAndFeel*> (&juce::LookAndFeel::getDefaultLookAndFeel()))
         lf->applyPalette();
+    tracks.refreshPalette();    // the lanes were built (in their default colours) before this ran
 
     // Waveform summaries arrive on the message thread (stale ones are dropped by the builder).
     waveforms.onOriginalReady = [this] (WaveformBuilder::SummaryPtr s)
