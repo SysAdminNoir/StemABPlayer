@@ -36,3 +36,9 @@ build/
 out/
 vcpkg_installed/
 CMakeUserPresets.json
+
+# Personal working notes (kept locally, not part of the project)
+/HANDOFF.md
+/IDEA.md
+/GUI-DE-AI-LOOK.md
+/StemABPlayer-JUCE-rebase-handoff.md
