@@ -316,8 +316,8 @@ void MainComponent::resized()
     header.setBounds (r.removeFromTop (header.getPreferredHeight()));
     deck.setBounds (r.removeFromBottom (deck.getPreferredHeight (r.getWidth())));
 
-    // The screen area: padding 14 18 10 (the status line above already gives some air), the meters on the right
-    r = r.withTrimmedTop (theme::scaled (6.0f, s)).withTrimmedBottom (theme::scaled (10.0f, s)).reduced (theme::scaled (18.0f, s), 0);
+    // The screen area: padding 4 18 8 (the status line above already gives some air), the meters on the right
+    r = r.withTrimmedTop (theme::scaled (4.0f, s)).withTrimmedBottom (theme::scaled (8.0f, s)).reduced (theme::scaled (18.0f, s), 0);
     bridge.setBounds (r.removeFromRight (theme::scaled (bridgeWidthPx, s)));
     r.removeFromRight (theme::scaled (14.0f, s));
     tracks.setBounds (r);

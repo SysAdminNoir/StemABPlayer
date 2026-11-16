@@ -13,12 +13,14 @@ namespace
     const juce::String middleDot (juce::CharPointer_UTF8 ("\xc2\xb7"));
 
     // Base metrics at 100 % (the mockup)
-    constexpr float padXPx = 18.0f, padYPx = 16.0f, columnGapPx = 26.0f;
-    constexpr float transportPx = 380.0f, masterPx = 250.0f, minCrossfadePx = 300.0f;
-    constexpr float timeScreenPx = 58.0f, rowGapPx = 12.0f;
+    constexpr float padXPx = 18.0f, padYPx = 12.0f, columnGapPx = 26.0f;
+    constexpr float transportPx = 380.0f, masterPx = 250.0f;            // the mockup's columns
+    constexpr float compactTransportPx = 336.0f, compactMasterPx = 196.0f;   // when space is short
+    constexpr float comfortableCrossfadePx = 420.0f, minCrossfadePx = 260.0f;
+    constexpr float timeScreenPx = 52.0f, rowGapPx = 10.0f;
     constexpr float keyWPx = 52.0f, playWPx = 76.0f, keyHPx = 44.0f, keyGapPx = 8.0f;
-    constexpr float silkRowPx = 14.0f, faderPx = 44.0f, padRowPx = 30.0f;
-    constexpr float knobBoxPx = 100.0f, clipPx = 44.0f, labelGapPx = 8.0f;
+    constexpr float silkRowPx = 14.0f, faderPx = 40.0f, padRowPx = 30.0f;
+    constexpr float knobBoxPx = 92.0f, clipPx = 44.0f, labelGapPx = 6.0f;
 }
 
 ControlDeck::ControlDeck()
@@ -118,7 +120,7 @@ void ControlDeck::setUiScale (float s)
     repaint();
 }
 
-ControlDeck::Metrics ControlDeck::metrics() const
+ControlDeck::Metrics ControlDeck::metrics (int width) const
 {
     const auto s = uiScale;
     const auto px = [s] (float v) { return theme::scaled (v, s); };
@@ -128,6 +130,11 @@ ControlDeck::Metrics ControlDeck::metrics() const
     m.gap = px (columnGapPx);
     m.transportW = px (transportPx);
     m.masterW = px (masterPx);
+    if (width - 2 * m.padX - 2 * m.gap - m.transportW - m.masterW < px (comfortableCrossfadePx))
+    {
+        m.transportW = px (compactTransportPx);
+        m.masterW = px (compactMasterPx);
+    }
     m.transportH = px (timeScreenPx + rowGapPx + keyHPx + 2.0f);
     m.xfH = px (silkRowPx + rowGapPx + faderPx + rowGapPx + padRowPx + 2.0f);
     m.masterH = px (knobBoxPx + labelGapPx + silkRowPx);
@@ -136,13 +143,13 @@ ControlDeck::Metrics ControlDeck::metrics() const
 
 bool ControlDeck::needsTwoRows (int width) const
 {
-    const auto m = metrics();
+    const auto m = metrics (width);
     return width - 2 * m.padX - m.transportW - m.masterW - 2 * m.gap < theme::scaled (minCrossfadePx, uiScale);
 }
 
 int ControlDeck::getPreferredHeight (int width) const
 {
-    const auto m = metrics();
+    const auto m = metrics (width);
     if (needsTwoRows (width))
         return 2 * m.padY + m.xfH + m.padY + juce::jmax (m.transportH, m.masterH);
     return 2 * m.padY + juce::jmax (m.transportH, m.xfH, m.masterH);
@@ -152,7 +159,7 @@ void ControlDeck::resized()
 {
     const auto s = uiScale;
     const auto px = [s] (float v) { return theme::scaled (v, s); };
-    const auto m = metrics();
+    const auto m = metrics (getWidth());
     auto area = getLocalBounds().reduced (m.padX, m.padY);
 
     juce::Rectangle<int> transportArea, crossfadeArea, masterArea;

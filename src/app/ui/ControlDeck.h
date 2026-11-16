@@ -50,7 +50,8 @@ private:
     {
         int transportW, masterW, transportH, xfH, masterH, padX, padY, gap;
     };
-    Metrics metrics() const;
+    /** Column widths shrink (transport 380 -> 336, master 250 -> 196) when the crossfade column gets narrow. */
+    Metrics metrics (int width) const;
     bool needsTwoRows (int width) const;
 
     float uiScale = 1.0f;

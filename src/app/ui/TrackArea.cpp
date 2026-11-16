@@ -16,7 +16,7 @@ namespace
     constexpr float rulerPx = 24.0f;
     constexpr float groupRowPx = 22.0f;
     constexpr float screenBottomPx = 6.0f;
-    constexpr float minLanePx = 56.0f;
+    constexpr float minLanePx = 44.0f;
     constexpr float aLaneFactor = 1.5f, rLaneFactor = 0.8f;
     constexpr float residualViewGain = 16.0f;   // +24 dB, so the Residual is visible
 

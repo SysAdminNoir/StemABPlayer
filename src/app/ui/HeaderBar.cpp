@@ -8,7 +8,7 @@ using theme::colour;
 
 namespace
 {
-    constexpr float topPanelPx = 64.0f, statusRowPx = 24.0f;
+    constexpr float topPanelPx = 58.0f, statusRowPx = 22.0f;
 
     juce::Font wordmarkFont (float s)       { return theme::uiFont (21.0f * s, theme::Weight::extraBold).withExtraKerningFactor (-0.01f); }
 }
