@@ -149,12 +149,12 @@ void TrackArea::updateStemPlaceholders()
 {
     const juce::String text = stemsState == StemsState::loading
                                   ? juce::String (juce::CharPointer_UTF8 ("Loading stems\xe2\x80\xa6"))
-                                  : stemsState == StemsState::ready
+                                  : stemsState == StemsState::ready || stemsState == StemsState::preview
                                         ? juce::String (juce::CharPointer_UTF8 ("Rendering waveform\xe2\x80\xa6"))
                                         : juce::String();
     for (auto& l : stemLanes)
         l->setPlaceholder (text);
-    rLane->setPlaceholder (text);
+    rLane->setPlaceholder (stemsState == StemsState::preview ? juce::String ("Needs an original") : text);
 }
 
 void TrackArea::setAudibleStems (const std::array<bool, numStems>& audible)

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "load/AlignmentCache.h"
+#include "load/DecodeStash.h"
 #include "load/PairLoader.h"
 
 using namespace stemab;
@@ -470,4 +471,174 @@ TEST_CASE ("PairLoader on the real pairs: A playable first, then B at +6522", "[
     // Zero-copy: the Stems play straight out of the decoded buffers, shifted by the offset.
     CHECK (ev.upgraded->stemChannel (0, 0) == (*ev.upgraded->decodedStems())[0].getReadPointer (0) + 6522);
     WARN ("A playable after " << ev.originalEvent.secondsSinceLoad << " s, B after " << ev.stemsEvent.secondsSinceLoad << " s");
+}
+
+TEST_CASE ("PairLoader: reset() drops the load in flight and forgets the reusable Original", "[load][loader]")
+{
+    TempDir tmp;
+    FakeBackend fake;
+    fake.pairs["a1.flac"] = fake.pairs["b1.stem.m4a"] = { 1, 5.0, 2112 };
+    const auto a1 = tmp.file ("a1.flac"), b1 = tmp.file ("b1.stem.m4a");
+
+    TaskQueue queue;
+    PairLoader loader (queue.poster(), nullptr, fake.backend());
+    Events first;
+    first.attach (loader);
+    loader.load (a1, b1);
+    finish (loader, queue);
+    REQUIRE (first.upgraded != nullptr);
+    CHECK (fake.originalDecodes.load() == 1);
+
+    Events dropped;
+    dropped.attach (loader);
+    loader.load (a1, b1);       // (would reuse A)
+    loader.reset();
+    finish (loader, queue);
+    CHECK (dropped.order.empty());
+
+    Events after;
+    after.attach (loader);
+    loader.load (a1, b1);
+    finish (loader, queue);
+    CHECK (fake.originalDecodes.load() == 2);   // decoded again: nothing was reused
+    REQUIRE (after.original != nullptr);
+    CHECK_FALSE (after.originalEvent.sameOriginal);
+    REQUIRE (after.upgraded != nullptr);
+    CHECK (after.upgraded->alignmentOffset() == 2112);
+}
+
+namespace
+{
+DecodedOriginal decodedOfLength (int n)
+{
+    DecodedOriginal d;
+    d.ok = true;
+    d.sampleRate = fs;
+    d.audio.setSize (2, n);
+    d.audio.clear();
+    return d;
+}
+}
+
+TEST_CASE ("DecodeStash: a previewed file's decode is handed over once, to the same file only", "[load][stash]")
+{
+    TempDir tmp;
+    const auto a = tmp.file ("a.flac"), other = tmp.file ("other.flac", "yy");
+    DecodeStash stash;
+    CHECK (stash.isEmpty());
+
+    SECTION ("put, then take: same file only, once")
+    {
+        const auto t = stash.beginOriginal (a);
+        stash.putOriginal (t, decodedOfLength (1000));
+        CHECK_FALSE (stash.takeOriginal (other).has_value());
+        CHECK_FALSE (stash.takeStems (a).has_value());          // the other kind's slot
+        auto got = stash.takeOriginal (a);
+        REQUIRE (got.has_value());
+        CHECK (got->audio.getNumSamples() == 1000);
+        CHECK_FALSE (stash.takeOriginal (a).has_value());
+        CHECK (stash.isEmpty());
+    }
+
+    SECTION ("a newer preview of the slot wins; the older one's result and abandon are ignored")
+    {
+        const auto t1 = stash.beginOriginal (a);
+        const auto t2 = stash.beginOriginal (a);
+        stash.putOriginal (t1, decodedOfLength (111));
+        stash.abandonOriginal (t1);
+        stash.putOriginal (t2, decodedOfLength (222));
+        auto got = stash.takeOriginal (a);
+        REQUIRE (got.has_value());
+        CHECK (got->audio.getNumSamples() == 222);
+    }
+
+    SECTION ("abandoned or failed previews leave nothing to take")
+    {
+        const auto t = stash.beginStems (a);
+        stash.abandonStems (t);
+        CHECK_FALSE (stash.takeStems (a).has_value());
+
+        const auto t2 = stash.beginOriginal (a);
+        DecodedOriginal failed;
+        failed.error = "Cancelled.";
+        stash.putOriginal (t2, std::move (failed));
+        CHECK_FALSE (stash.takeOriginal (a).has_value());
+        CHECK (stash.isEmpty());
+    }
+
+    SECTION ("take waits for a preview still decoding that very file")
+    {
+        const auto t = stash.beginOriginal (a);
+        std::thread preview ([&]
+        {
+            std::this_thread::sleep_for (std::chrono::milliseconds (50));
+            stash.putOriginal (t, decodedOfLength (333));
+        });
+        auto got = stash.takeOriginal (a);
+        preview.join();
+        REQUIRE (got.has_value());
+        CHECK (got->audio.getNumSamples() == 333);
+    }
+
+    SECTION ("a waiting take gives up on its cancel, or on clear()")
+    {
+        stash.beginOriginal (a);
+
+        std::atomic<bool> cancelled { false };
+        std::thread canceller ([&]
+        {
+            std::this_thread::sleep_for (std::chrono::milliseconds (30));
+            cancelled = true;
+        });
+        CHECK_FALSE (stash.takeOriginal (a, [&] { return cancelled.load(); }).has_value());
+        canceller.join();
+
+        std::thread clearer ([&]
+        {
+            std::this_thread::sleep_for (std::chrono::milliseconds (30));
+            stash.clear();
+        });
+        CHECK_FALSE (stash.takeOriginal (a).has_value());
+        clearer.join();
+        CHECK (stash.isEmpty());
+    }
+}
+
+TEST_CASE ("DecodeStash::wrap: the pair load takes a previewed decode instead of decoding again", "[load][stash][loader]")
+{
+    TempDir tmp;
+    FakeBackend fake;
+    fake.pairs["a1.flac"] = fake.pairs["b1.stem.m4a"] = { 1, 5.0, 2112 };
+    const auto a1 = tmp.file ("a1.flac"), b1 = tmp.file ("b1.stem.m4a");
+
+    auto stash = std::make_shared<DecodeStash>();
+    const auto inner = fake.backend();
+
+    // The "preview": A decoded with the same decoder, stashed.
+    const auto ticket = stash->beginOriginal (a1);
+    stash->putOriginal (ticket, inner.decodeOriginal (a1, DecodeOptions {}));
+    REQUIRE (fake.originalDecodes.load() == 1);
+
+    TaskQueue queue;
+    PairLoader loader (queue.poster(), nullptr, DecodeStash::wrap (stash, inner));
+    Events ev;
+    ev.attach (loader);
+    loader.load (a1, b1);
+    finish (loader, queue);
+
+    CHECK (fake.originalDecodes.load() == 1);   // taken from the stash
+    CHECK (stash->isEmpty());
+    REQUIRE (ev.original != nullptr);
+    CHECK (ev.original->length() == (juce::int64) (5.0 * fs));
+    REQUIRE (ev.upgraded != nullptr);
+    CHECK (ev.upgraded->alignmentOffset() == 2112);
+
+    // Nothing stashed: the wrapped decoder runs.
+    loader.reset();
+    Events again;
+    again.attach (loader);
+    loader.load (a1, b1);
+    finish (loader, queue);
+    CHECK (fake.originalDecodes.load() == 2);
+    REQUIRE (again.upgraded != nullptr);
 }

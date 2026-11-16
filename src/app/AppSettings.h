@@ -60,6 +60,8 @@ public:
     void setResumeSession (bool);
     std::optional<SessionState> getSession() const;
     void setSession (const SessionState&);
+    /** Forgets the saved pair (Unload all): nothing is resumed on the next launch. */
+    void clearSession();
 
     juce::String getWindowState() const;
     void setWindowState (const juce::String&);

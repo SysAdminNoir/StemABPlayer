@@ -5,11 +5,12 @@
 namespace stemab
 {
 
-/** Transport buttons drawn with Paths (24-unit icon box, scaled to the button). */
+/** Transport (and header) buttons drawn with Paths (24-unit icon box, scaled to the button). A disabled
+    button draws its icon dimmed. */
 class IconButton final : public juce::Button
 {
 public:
-    enum class Icon { toStart, back, forward, loop, playPause };
+    enum class Icon { toStart, back, forward, loop, playPause, eject };
 
     IconButton (const juce::String& name, Icon);
 

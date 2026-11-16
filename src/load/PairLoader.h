@@ -109,6 +109,10 @@ public:
     /** Cancels the load in progress without starting another. */
     void cancel();
 
+    /** cancel(), and forgets the last delivered Original (no reuse, its buffer is released here unless a
+        Session still holds it): the state of a new loader. */
+    void reset();
+
     int getGeneration() const noexcept      { return ownerGeneration; }
 
     /** Blocks until no worker job is running or queued (posted tasks may still be waiting), or the timeout

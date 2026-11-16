@@ -25,10 +25,11 @@ namespace
 }
 
 //==============================================================================
-SessionLoader::SessionLoader (juce::AudioDeviceManager& dm, PlaybackEngine& e)
+SessionLoader::SessionLoader (juce::AudioDeviceManager& dm, PlaybackEngine& e, PairLoader::Backend backend)
     : deviceManager (dm),
       engine (e),
-      pairLoader ([] (PairLoader::Task task) { juce::MessageManager::callAsync (std::move (task)); }, &cache)
+      pairLoader ([] (PairLoader::Task task) { juce::MessageManager::callAsync (std::move (task)); }, &cache,
+                  std::move (backend))
 {
     pairLoader.onOriginalReady      = [this] (const auto& ev) { originalReady (ev); };
     pairLoader.onStemsDecoded       = [this] (double seconds) { stemsDecoded (seconds); };
@@ -68,6 +69,18 @@ void SessionLoader::load (const juce::File& original, const juce::File& stemFile
     changed();
 
     pairLoader.load (original, stemFile);
+}
+
+void SessionLoader::unload()
+{
+    pairLoader.reset();             // in-flight work stops; its results are never delivered
+    engine.setSession (nullptr);    // fade out, then silence (sessions are freed on the UI thread)
+    session = nullptr;
+
+    const auto keep = status;
+    status = {};
+    status.deviceRate = keep.deviceRate;
+    changed();
 }
 
 void SessionLoader::updateProgress()

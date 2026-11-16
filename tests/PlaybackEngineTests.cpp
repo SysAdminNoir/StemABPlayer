@@ -609,6 +609,37 @@ TEST_CASE ("Session swap: playhead resets, transport pauses, old session release
         CHECK_FALSE (e.isPlaying());
     }
 
+    SECTION ("unload while playing a session with Stems (Unload all): fade out, empty engine, freed on the UI thread")
+    {
+        PlaybackEngine e;
+        auto s = makeSession (200000, sine (1000.0, 1.0f), { sine (1000.0, 0.5f), nullptr, nullptr, nullptr });
+        std::weak_ptr<const Session> weak = s;
+        startSettled (e, std::move (s));
+        REQUIRE (e.isPlaying());
+        REQUIRE (e.sessionHasStems());
+
+        e.pause();
+        e.setSession (nullptr);
+        const auto o = render (e, 2048);
+        CHECK (maxJump (o.l) < 0.15f);                  // faded, no click
+        CHECK (o.l.back() == 0.0f);
+        CHECK_FALSE (e.isPlaying());
+        CHECK (e.getSessionLength() == 0);
+        CHECK (e.getSessionSampleRate() == 0.0);
+        CHECK_FALSE (e.sessionHasStems());
+        CHECK (e.getPlayheadSample() == 0);
+
+        e.readMeter (MeterTap::Output, 0);       // (peaks are read-and-reset: drop the fade-out's)
+        const auto silent = render (e, 4096);
+        CHECK (std::all_of (silent.l.begin(), silent.l.end(), [] (float x) { return x == 0.0f; }));
+        CHECK (std::all_of (silent.r.begin(), silent.r.end(), [] (float x) { return x == 0.0f; }));
+        CHECK (e.readMeter (MeterTap::Output, 0).peak == 0.0f);
+
+        CHECK_FALSE (weak.expired());           // retired by the audio thread, never freed there...
+        e.releaseRetiredSessions();
+        CHECK (weak.expired());                 // ...but here, on the UI thread
+    }
+
     SECTION ("threaded: audio callback loop while the UI swaps, plays, seeks")
     {
         PlaybackEngine e;

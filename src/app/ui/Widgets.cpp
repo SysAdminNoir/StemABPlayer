@@ -16,6 +16,7 @@ namespace
         static const juce::Path loop    = juce::Drawable::parseSVGPath (
             "M17 2l3 3-3 3M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 0 1-4 4H4");
         static const juce::Path play    = juce::Drawable::parseSVGPath ("M8 5l11 7-11 7z");
+        static const juce::Path eject   = juce::Drawable::parseSVGPath ("M12 5l7 8H5zM5 18h14");
         static const juce::Path pause   = []
         {
             juce::Path p;
@@ -30,6 +31,7 @@ namespace
             case IconButton::Icon::back:      return back;
             case IconButton::Icon::forward:   return forward;
             case IconButton::Icon::loop:      return loop;
+            case IconButton::Icon::eject:     return eject;
             case IconButton::Icon::playPause: break;
         }
         return playing ? pause : play;
@@ -84,7 +86,7 @@ void IconButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
 
     const float iconSize = 18.0f * uiScale;
     const auto fg = on ? colour (theme::colourBArgb) : colour (highlighted ? theme::textArgb : theme::buttonTextArgb);
-    g.setColour (fg);
+    g.setColour (isEnabled() ? fg : fg.withMultipliedAlpha (0.35f));
     g.strokePath (iconPath (icon, false),
                   juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded),
                   iconTransform (r.withSizeKeepingCentre (iconSize, iconSize)));

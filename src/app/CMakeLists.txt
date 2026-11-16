@@ -6,6 +6,8 @@ juce_add_gui_app(StemAB_App
 target_sources(StemAB_App PRIVATE
     AppSettings.cpp
     AppSettings.h
+    FilePreview.cpp
+    FilePreview.h
     Main.cpp
     MainComponent.cpp
     MainComponent.h

@@ -67,11 +67,18 @@ struct LoadStatus
 class SessionLoader final
 {
 public:
-    SessionLoader (juce::AudioDeviceManager&, PlaybackEngine&);
+    /** `backend`: the PairLoader's decoders (e.g. DecodeStash::wrap() around the FFmpeg ones). */
+    SessionLoader (juce::AudioDeviceManager&, PlaybackEngine&, PairLoader::Backend backend = PairLoader::defaultBackend());
     ~SessionLoader();
 
     /** Starts loading a pair, replacing the current one once the new Original is decoded. */
     void load (const juce::File& original, const juce::File& stemFile);
+
+    /** Back to the state before any load: the load in progress is cancelled (nothing more is delivered),
+        the engine's session is cleared (a playing transport fades out first; the audio thread retires the
+        old Session and PlaybackEngine::releaseRetiredSessions() frees it on the UI thread), the reusable
+        Original is forgotten and the status is reset. */
+    void unload();
 
     /** Call on every AudioDeviceManager change. A different device re-runs the rate policy (Native Rate
         preferred); a rate change on the same device is respected (the engine resamples in realtime). */

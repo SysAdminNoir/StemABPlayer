@@ -1,6 +1,8 @@
 add_library(StemAB_Load STATIC
     AlignmentCache.cpp
     AlignmentCache.h
+    DecodeStash.cpp
+    DecodeStash.h
     PairLoader.cpp
     PairLoader.h)
 

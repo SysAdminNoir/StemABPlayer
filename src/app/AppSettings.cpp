@@ -144,6 +144,12 @@ void AppSettings::setSession (const SessionState& s)
     }
 }
 
+void AppSettings::clearSession()
+{
+    if (auto* p = props())
+        p->removeValue (Keys::session);
+}
+
 //==============================================================================
 juce::String AppSettings::getWindowState() const
 {

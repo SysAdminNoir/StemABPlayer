@@ -57,6 +57,15 @@ namespace
     {
         return { {}, theme::colour (argb), false, true };
     }
+
+    /** e.g. "FLAC - 44.1 kHz - stereo" (middle dots) for A's header. */
+    juce::String originalSubLabel (const juce::String& fileName, double sampleRate)
+    {
+        const auto ext = juce::File::createFileWithoutCheckingPath (fileName).getFileExtension()
+                             .trimCharactersAtStart (".").toUpperCase();
+        return (ext.isNotEmpty() ? ext + " " + middleDot + " " : juce::String())
+               + format::kiloHertz (sampleRate) + " " + middleDot + " stereo";
+    }
 }
 
 //==============================================================================
@@ -78,18 +87,60 @@ MainComponent::MainComponent()
     waveforms.onOriginalReady = [this] (WaveformBuilder::SummaryPtr s)
     {
         originalSummaryReady = true;
+        originalPreviewShown = false;
         tracks.setOriginalSummary (std::move (s));
         tracks.setOriginalState (false);
     };
     waveforms.onStemsReady = [this] (const WaveformBuilder::StemSummaries& r)
     {
+        stemsPreviewShown = false;
         tracks.setStemSummaries (r.stems, r.residual);
+    };
+
+    // Previews of a file chosen on its own. The pair's own summaries (above) win: a preview that arrives
+    // after this pair's Original / Stems are in is dropped.
+    previews.onOriginalReady = [this] (const FilePreview::OriginalResult& r)
+    {
+        if (r.file != originalFile || originalSummaryReady || loader.getStatus().original == StageState::done)
+            return;
+
+        if (r.error.isNotEmpty())
+        {
+            previewNotice = r.file.getFileName() + ": " + r.error;
+            tracks.setOriginalState (false);
+            updateStatusText();
+            return;
+        }
+
+        originalPreviewShown = true;
+        tracks.setOriginalSummary (r.summary);
+        tracks.setOriginalState (false);
+        tracks.setOriginalSubLabel (originalSubLabel (r.file.getFileName(), r.sampleRate));
+        setPreviewTimeline (r.length, r.sampleRate);
+    };
+    previews.onStemsReady = [this] (const FilePreview::StemsResult& r)
+    {
+        if (r.file != stemFile || loader.getStatus().alignment == StageState::done)
+            return;
+
+        if (r.error.isNotEmpty())
+        {
+            previewNotice = r.file.getFileName() + ": " + r.error;
+            updateStatusText();
+            return;
+        }
+
+        stemsPreviewShown = true;
+        tracks.setStemSummaries (r.stems, nullptr);     // unaligned; no Residual without an aligned pair
+        if (! originalPreviewShown)
+            setPreviewTimeline (r.length, r.sampleRate);
     };
 
     // Header
     header.openOriginalButton.onClick = [this] { chooseOriginal(); };
     header.openStemButton.onClick = [this] { chooseStemFile(); };
     header.settingsButton.onClick = [this] { showPreferences(); };
+    header.unloadButton.onClick = [this] { unloadAll(); };
     header.scaleDownButton.onClick = [this] { setScaleIndex (scaleIndex - 1); };
     header.scaleUpButton.onClick = [this] { setScaleIndex (scaleIndex + 1); };
 
@@ -248,7 +299,8 @@ void MainComponent::pollSession()
 
     // What the stem / residual lanes say while they have no waveform.
     const auto& st = loader.getStatus();
-    const auto stemsState = s == nullptr ? TrackArea::StemsState::noSession
+    const bool stemsPreview = stemsPreviewShown || previews.isStemsPending();
+    const auto stemsState = s == nullptr ? (stemsPreview ? TrackArea::StemsState::preview : TrackArea::StemsState::noSession)
                           : s->hasStems() ? TrackArea::StemsState::ready
                           : (st.stems == StageState::failed || st.alignment == StageState::failed)
                                 ? TrackArea::StemsState::noSession
@@ -276,17 +328,19 @@ void MainComponent::pollSession()
 
     if (previous == nullptr || ! s->sharesOriginalWith (*previous))
     {
-        // A new Original: its waveform, and the stem lanes start over.
+        // A new Original: its waveform, and the stem lanes start over - except for previews of this pair's
+        // files, which stay until the real summaries replace them.
         originalSummaryReady = false;
-        tracks.setOriginalSummary (nullptr);
-        tracks.setOriginalState (true);
-        tracks.clearStemSummaries();
+        if (! originalPreviewShown)
+        {
+            tracks.setOriginalSummary (nullptr);
+            tracks.setOriginalState (true);
+        }
+        if (! stemsPreviewShown)
+            tracks.clearStemSummaries();
         waveforms.buildOriginal (s);
 
-        const auto ext = juce::File::createFileWithoutCheckingPath (st.originalName).getFileExtension()
-                             .trimCharactersAtStart (".").toUpperCase();
-        tracks.setOriginalSubLabel ((ext.isNotEmpty() ? ext + " " + middleDot + " " : juce::String())
-                                    + format::kiloHertz (s->sampleRate()) + " " + middleDot + " stereo");
+        tracks.setOriginalSubLabel (originalSubLabel (st.originalName, s->sampleRate()));
     }
 
     if (s->hasStems())
@@ -297,7 +351,8 @@ void MainComponent::pollSession()
     else
     {
         waveforms.cancelStems();
-        tracks.clearStemSummaries();
+        if (! stemsPreviewShown)
+            tracks.clearStemSummaries();
     }
 }
 
@@ -323,9 +378,12 @@ void MainComponent::timerCallback()
     const double rate = engine.getSessionSampleRate();
     const auto playhead = engine.getPlayheadSample();
 
-    if (len > 0 && rate > 0.0)
+    if (len > 0 && rate > 0.0 && loader.getPlaybackSession() != nullptr)
         deck.setTime (format::minutesSecondsMillis ((double) playhead / rate),
                       "Sample: " + format::withThousands (playhead) + "\nTotal:  " + format::withThousands (len));
+    else if (previewLength > 0 && previewRate > 0.0)
+        deck.setTime ("0:00.000", "preview only (" + format::minutesSecondsMillis ((double) previewLength / previewRate)
+                                      + "): open the other file to play");
     else
         deck.setTime ("0:00.000", "no track loaded");
 
@@ -429,6 +487,7 @@ void MainComponent::chooseOriginal()
                                   cancelResume();
                                   settings.setLastUsedFolder (AppSettings::Folder::originals, f.getParentDirectory());
                                   originalFile = f;
+                                  previewChosenOriginal();
                                   startLoadIfReady();
                                   updateStatusText();
                               }
@@ -447,6 +506,7 @@ void MainComponent::chooseStemFile()
                                   cancelResume();
                                   settings.setLastUsedFolder (AppSettings::Folder::stemFiles, f.getParentDirectory());
                                   stemFile = f;
+                                  previewChosenStemFile();
                                   startLoadIfReady();
                                   updateStatusText();
                               }
@@ -465,7 +525,82 @@ void MainComponent::loadPair (const juce::File& original, const juce::File& stem
 void MainComponent::startLoadIfReady()
 {
     if (originalFile.existsAsFile() && stemFile.existsAsFile())
+    {
+        pairOriginal = originalFile;
+        pairStems = stemFile;
         loader.load (originalFile, stemFile);
+    }
+}
+
+void MainComponent::previewChosenOriginal()
+{
+    previewNotice.clear();
+    if (originalFile == pairOriginal && loader.getStatus().original == StageState::done)
+        return;     // the loaded pair's own Original: the reload reuses it (and its waveform stays)
+
+    waveforms.cancelOriginal();
+    originalSummaryReady = false;
+    originalPreviewShown = false;
+    tracks.setOriginalSummary (nullptr);
+    tracks.setOriginalState (true);                 // "Rendering waveform..." until the preview (or A) is in
+    previews.previewOriginal (originalFile);        // before the pair load, which then takes its decode
+}
+
+void MainComponent::previewChosenStemFile()
+{
+    previewNotice.clear();
+    if (stemFile == pairStems && loader.getStatus().alignment == StageState::done)
+        return;
+
+    waveforms.cancelStems();
+    stemsPreviewShown = false;
+    tracks.clearStemSummaries();
+    previews.previewStems (stemFile);
+}
+
+void MainComponent::setPreviewTimeline (juce::int64 length, double sampleRate)
+{
+    previewLength = length;
+    previewRate = sampleRate;
+    if (shownSession == nullptr)
+        tracks.setTimeline (length, sampleRate);    // a session's own timeline wins once it exists
+}
+
+void MainComponent::unloadAll()
+{
+    cancelResume();
+    engine.pause();                 // (setSession (nullptr) below fades a playing transport out anyway)
+
+    // Every job: previews (and the decode stash), waveform summaries, the pair load. The loader drops the
+    // engine's session; the audio thread retires it and releaseRetiredSessions() (timer) frees it here.
+    previews.cancelAll();
+    waveforms.cancelOriginal();
+    waveforms.cancelStems();
+    loader.unload();
+
+    originalFile = stemFile = pairOriginal = pairStems = juce::File();
+    shownSession = nullptr;
+    originalSummaryReady = originalPreviewShown = stemsPreviewShown = false;
+    previewLength = 0;
+    previewRate = 0.0;
+    previewNotice.clear();
+
+    tracks.setOriginalSummary (nullptr);
+    tracks.setOriginalState (false);
+    tracks.clearStemSummaries();
+    tracks.setStemsState (TrackArea::StemsState::noSession);
+    tracks.setOriginalSubLabel ({});
+    tracks.setTimeline (0, 0.0);
+    tracks.update (0);
+    resetClip();
+
+    // Nothing to resume on the next launch (the mix settings stay as they are).
+    settings.clearSession();
+    settings.save();
+    lastSavedSession.reset();
+
+    updateMixButtons();
+    updateStatusText();
 }
 
 void MainComponent::showPreferences()
@@ -677,11 +812,15 @@ void MainComponent::updateStatusText()
 
     if (st.original == StageState::idle && st.progress.isEmpty())
     {
+        const bool hasA = originalFile.existsAsFile(), hasB = stemFile.existsAsFile();
+        const juce::String idle = hasA && ! hasB ? "Original chosen - waiting for a stem file"
+                                : hasB && ! hasA ? "Stem file chosen - waiting for an original"
+                                                 : "Choose an original and a stem file";
         if (st.error.isEmpty())
-            left.add (seg (originalFile.existsAsFile() || stemFile.existsAsFile()
-                               ? juce::String ("Choose the other file to start")
-                               : juce::String ("Choose an original and a stem file"), theme::mutedTextArgb));
-        lines.add ("Status:  choose an original and a stem file");
+            left.add (seg (idle, theme::mutedTextArgb));
+        if (previews.isOriginalPending() || previews.isStemsPending())
+            left.add (seg ("   Rendering preview" + ellipsis, theme::textArgb));
+        lines.add ("Status:  " + idle);
     }
     else
     {
@@ -728,6 +867,12 @@ void MainComponent::updateStatusText()
     {
         left.add (seg ("   Note: " + st.notice, theme::amberArgb));
         lines.add ("Note:  " + st.notice);
+    }
+
+    if (previewNotice.isNotEmpty())
+    {
+        left.add (seg ("   Note: " + previewNotice, theme::amberArgb));
+        lines.add ("Note:  " + previewNotice);
     }
 
     if (resumeNotice.isNotEmpty())
@@ -797,8 +942,13 @@ void MainComponent::updateStatusText()
     header.setStatus (left, right);
     header.setTooltip (lines.joinIntoString ("\n"));
 
-    tracks.setHint (st.busy && shownSession == nullptr ? "Decoding the original" + ellipsis
-                                                       : juce::String ("Open an original and a stem file"));
+    // Shown only while the timeline is empty. With one file chosen its lanes say what is happening.
+    const bool anyFile = originalFile != juce::File() || stemFile != juce::File();
+    tracks.setHint (st.busy && shownSession == nullptr && previewLength <= 0 ? "Decoding the original" + ellipsis
+                    : anyFile ? juce::String()
+                              : juce::String ("Open an original and a stem file"));
+
+    header.unloadButton.setEnabled (anyFile || st.busy || loader.getPlaybackSession() != nullptr);
 }
 
 void MainComponent::updateMixButtons()

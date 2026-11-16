@@ -8,10 +8,12 @@
 #include <optional>
 
 #include "AppSettings.h"
+#include "FilePreview.h"
 #include "SessionLoader.h"
 #include "SessionState.h"
 #include "WaveformBuilder.h"
 #include "engine/PlaybackEngine.h"
+#include "load/DecodeStash.h"
 #include "ui/ControlDeck.h"
 #include "ui/HeaderBar.h"
 #include "ui/MeterBridge.h"
@@ -91,6 +93,14 @@ private:
     void chooseOriginal();
     void chooseStemFile();
     void startLoadIfReady();
+    /** A file chosen in a dialog: its lane(s) start over and its waveform preview starts at once (before the
+        pair is complete). Not for the file the loaded pair already uses (the reload reuses that one). */
+    void previewChosenOriginal();
+    void previewChosenStemFile();
+    /** Back to the empty state: transport paused, both files cleared, the engine's session dropped, every
+        load / preview / waveform job cancelled, lanes and readouts reset, the saved resume pair forgotten. */
+    void unloadAll();
+    void setPreviewTimeline (juce::int64 length, double sampleRate);
     void showPreferences();
     void updateStatusText();
     void updateMixButtons();
@@ -122,17 +132,21 @@ private:
     void cancelResume();
     void saveDeviceState();
 
-    // Destruction order matters (reverse of declaration): the waveform jobs and the loader go before the
-    // device, and the device before the engine. The settings go last (their destructor writes the file).
+    // Destruction order matters (reverse of declaration): the previews, the waveform jobs and the loader go
+    // before the device, and the device before the engine. The settings go last (their destructor writes the
+    // file). The decode stash is shared by the previews and the loader's decoders (it outlives both).
     AppSettings settings;
     PlaybackEngine engine;
     juce::AudioDeviceManager deviceManager;
     EngineCallback engineCallback { engine };
-    SessionLoader loader { deviceManager, engine };
+    std::shared_ptr<DecodeStash> decodeStash = std::make_shared<DecodeStash>();
+    SessionLoader loader { deviceManager, engine, DecodeStash::wrap (decodeStash) };
     WaveformBuilder waveforms;
+    FilePreview previews { decodeStash };
     juce::String initialiseError;
 
     juce::File originalFile, stemFile;
+    juce::File pairOriginal, pairStems;             // the pair last handed to loader.load()
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<PreferencesWindow> preferences;     // before the device's destruction (the selector listens to it)
     juce::TooltipWindow tooltips { nullptr, 600 };
@@ -144,6 +158,12 @@ private:
 
     std::shared_ptr<const Session> shownSession;    // what the lanes show (polled from the loader)
     bool originalSummaryReady = false;
+
+    // Previews of a file chosen on its own (FilePreview); the pair's own summaries replace them.
+    bool originalPreviewShown = false, stemsPreviewShown = false;
+    juce::int64 previewLength = 0;                  // the timeline while no session exists (0: none)
+    double previewRate = 0.0;
+    juce::String previewNotice;                     // e.g. a chosen file that could not be decoded
 
     int scaleIndex = 1;                             // into scaleSteps (100 %)
     double clipShownUntilMs = 0.0;

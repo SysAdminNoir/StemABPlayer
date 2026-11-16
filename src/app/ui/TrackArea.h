@@ -25,8 +25,9 @@ public:
     static constexpr int numStems = 4;
     using SummaryPtr = std::shared_ptr<const WaveformSummary>;
 
-    /** What the stem / residual lanes show while they have no waveform. */
-    enum class StemsState { noSession, loading, ready };
+    /** What the stem / residual lanes show while they have no waveform. `preview`: a Stem File chosen on its
+        own - its Stems' waveforms are (being) previewed; the Residual waits for an Original. */
+    enum class StemsState { noSession, preview, loading, ready };
 
     TrackArea();
 

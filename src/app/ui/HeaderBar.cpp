@@ -36,6 +36,7 @@ HeaderBar::HeaderBar()
         styleHeaderButton (*b, 0.36);
         addAndMakeVisible (b);
     }
+    addAndMakeVisible (unloadButton);
 }
 
 void HeaderBar::setFileNames (const juce::String& original, const juce::String& stemFile)
@@ -76,6 +77,7 @@ void HeaderBar::setScaleLabel (const juce::String& s)
 void HeaderBar::setUiScale (float s)
 {
     uiScale = s;
+    unloadButton.setUiScale (s);
     resized();
     repaint();
 }
@@ -129,6 +131,8 @@ void HeaderBar::resized()
     row.removeFromRight (theme::scaled (12.0f, s));
 
     place (settingsButton, fitWidth (settingsButton));
+    row.removeFromRight (theme::scaled (12.0f, s));
+    unloadButton.setBounds (row.removeFromRight (bh).withSizeKeepingCentre (bh, bh));
     row.removeFromRight (theme::scaled (6.0f, s));
     place (openStemButton, fitWidth (openStemButton));
     row.removeFromRight (theme::scaled (6.0f, s));

@@ -2,10 +2,12 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "app/ui/Widgets.h"
+
 namespace stemab
 {
 
-/** The header bar: logo + "STEM A/B", the A and B file chips, the file / Preferences buttons and the
+/** The header bar: logo + "STEM A/B", the A and B file chips, the file / Unload all / Preferences buttons and the
     interface-scale buttons (row 1); a status line (row 2) - load progress, errors and notices on the left,
     Alignment Offset / Track Null Depth / rate / device on the right. The full detail is in the tooltip. */
 class HeaderBar final : public juce::Component,
@@ -24,6 +26,7 @@ public:
     HeaderBar();
 
     juce::TextButton openOriginalButton, openStemButton, settingsButton, scaleDownButton, scaleUpButton;
+    IconButton unloadButton { "Unload all files", IconButton::Icon::eject };
 
     void setFileNames (const juce::String& original, const juce::String& stemFile);
     void setStatus (const juce::Array<Segment>& left, const juce::Array<Segment>& right);

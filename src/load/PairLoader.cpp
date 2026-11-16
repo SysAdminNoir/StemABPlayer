@@ -86,6 +86,13 @@ void PairLoader::cancel()
     generation.store (++ownerGeneration);
 }
 
+void PairLoader::reset()
+{
+    cancel();
+    lastOriginalIdentity = {};
+    lastOriginalSession = nullptr;
+}
+
 bool PairLoader::waitUntilIdle (int timeoutMs)
 {
     const auto deadline = nowMs() + timeoutMs;
