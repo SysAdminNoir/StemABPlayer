@@ -88,8 +88,8 @@ ctest --preset release
 
 Stem A/B Player is licensed under the **GNU Affero General Public License v3.0** — see [LICENSE](LICENSE).
 The libraries and fonts it uses have their own licenses, listed in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Release builds that include ASIO support are for personal
-use only, under Steinberg's ASIO SDK terms.
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). ASIO support uses the Steinberg ASIO SDK under its GPLv3
+option, which is compatible with this project's AGPL-3.0.
 
 ## Project layout
 

@@ -53,7 +53,7 @@ at the top of the app shows the available device types (and `[built without ASIO
 | Catch2 | `FetchContent` (GitHub) | tag `v3.16.1` |
 | r8brain-free-src | `FetchContent` (GitHub), sources only | tag `version-6.5` (MIT) |
 | FFmpeg | vcpkg manifest (`vcpkg.json`) | whatever the pinned `builtin-baseline` provides (FFmpeg 9.0.2) |
-| ASIO SDK | local folder (`STEMAB_ASIO_SDK_DIR`) | Steinberg ASIO SDK 2.3.x |
+| ASIO SDK | local folder (`STEMAB_ASIO_SDK_DIR`) | Steinberg ASIO SDK 2.3.4 (dual-licensed; used under GPLv3) |
 
 ## Packaging a release
 
