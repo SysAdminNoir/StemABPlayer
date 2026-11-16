@@ -524,7 +524,7 @@ juce::File MainComponent::chooserFolder (AppSettings::Folder folder) const
 void MainComponent::chooseOriginal()
 {
     chooser = std::make_unique<juce::FileChooser> ("Open original (A)", chooserFolder (AppSettings::Folder::originals),
-                                                   "*.flac;*.wav;*.aif;*.aiff;*.mp3;*.m4a;*.ogg;*.opus");
+                                                   "*.flac;*.wav;*.aif;*.aiff;*.aifc;*.mp3;*.m4a;*.mp4;*.aac;*.alac;*.ogg;*.oga;*.opus;*.wma;*.ape;*.wv;*.tta;*.dsf;*.dff;*.caf;*.w64;*.rf64");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [this] (const juce::FileChooser& fc)
                           {
