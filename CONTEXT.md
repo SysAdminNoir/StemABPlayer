@@ -11,14 +11,20 @@ reference every comparison is made against.
 
 **Stem File**
 A single NI/Traktor `.stem.m4a` file (e.g. in `Stem Files/`). Holds an Embedded Master plus exactly four
-Stems. It is what the player reads to get B.
+Stems. One of the two things the player reads to get B.
+
+**Stem Set**
+The other way to get B: one to four separate audio files, one per Stem (e.g. `drums.wav`, `bass.wav`,
+`other.wav`, `vocals.wav` from Demucs or UVR), mapped to the Stems by keywords in their names. All must share
+one sample rate. A Stem without a file is silent, so the Residual is A minus the Stems that exist. From
+decoding on, a Stem Set is treated exactly like a Stem File.
 
 **Embedded Master**
 The first audio track inside a Stem File: NI's own re-encoded full mix. *Not* the Original and *not* used
 as A.
 
 **Stem**
-One separated component inside a Stem File. There are always exactly four, in this order:
+One separated component of a Stem File or Stem Set. There are always exactly four, in this order:
 **Drums, Bass, Other, Vocals**.
 
 **Stem Sum (B)**

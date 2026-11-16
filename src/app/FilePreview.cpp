@@ -108,20 +108,20 @@ void FilePreview::previewOriginal (const juce::File& file)
     });
 }
 
-void FilePreview::previewStems (const juce::File& file)
+void FilePreview::previewStems (const StemSource& source)
 {
     const auto generation = ++stemsGeneration;
-    const auto ticket = stash->beginStems (file);
+    const auto ticket = stash->beginStems (source);
     stemsPending = true;
 
-    pool.addJob ([this, file, generation, ticket, st = stash, tok = token]
+    pool.addJob ([this, source, generation, ticket, st = stash, tok = token]
     {
         const CancelCheck cancel = [this, generation] { return shuttingDown.load() || stemsGeneration.load() != generation; };
 
-        auto decoded = decodeStemFile (file, DecodeOptions { cancel, true });
+        auto decoded = decodeStemSource (source, DecodeOptions { cancel, true });
 
         StemsResult result;
-        result.file = file;
+        result.source = source;
 
         if (isCancelled (cancel))
         {

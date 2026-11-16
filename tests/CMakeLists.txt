@@ -10,6 +10,7 @@ add_executable(StemAB_Tests
     AlignmentTests.cpp
     LoadTests.cpp
     SessionStateTests.cpp
+    StemSetTests.cpp
     WaveformSummaryTests.cpp
     # The resume-session value type lives with the app but needs only juce_core: tested here directly.
     ${PROJECT_SOURCE_DIR}/src/app/SessionState.cpp
@@ -27,6 +28,7 @@ target_link_libraries(StemAB_Tests PRIVATE
     StemAB_Load
     StemAB_JuceModules
     juce::juce_data_structures
+    juce::juce_audio_formats    # StemSetTests write small WAV stem sets (juce::WavAudioFormat)
     Catch2::Catch2WithMain)
 
 # Real-file tests look for "Audio Files/" and "Stem Files/" under this folder and SKIP when they are absent.

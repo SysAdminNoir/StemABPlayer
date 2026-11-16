@@ -43,6 +43,41 @@ FileIdentity FileIdentity::of (const juce::File& f)
     return id;
 }
 
+FileIdentity FileIdentity::of (const StemSource& source)
+{
+    if (! source.isSet())
+        return of (source.stemFile);
+
+    // A Stem Set: one identity over its slots, in Stem order. Any file's path, size or time changes it.
+    FileIdentity id;
+    juce::StringArray paths;
+    juce::uint64 mix = 1469598103934665603ull;
+    juce::int64 size = 0;
+
+    for (const auto& f : source.setFiles)
+    {
+        if (f == juce::File())
+        {
+            paths.add ({});
+            mix = (mix ^ 0x9e3779b97f4a7c15ull) * 1099511628211ull;
+            continue;
+        }
+
+        const auto one = of (f);
+        if (! one.isValid())
+            return {};          // a missing file: no identity (no cache, no stash)
+
+        paths.add (one.path);
+        size += one.size;
+        mix = (mix ^ (juce::uint64) one.modifiedMs) * 1099511628211ull;
+    }
+
+    id.path = "stem set:" + paths.joinIntoString ("|");
+    id.size = size;
+    id.modifiedMs = (juce::int64) (mix & 0x7fffffffffffffffull);
+    return id;
+}
+
 //==============================================================================
 AlignmentCache::AlignmentCache (juce::File jsonFile) : file (std::move (jsonFile)) {}
 

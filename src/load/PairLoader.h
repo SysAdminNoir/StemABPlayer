@@ -8,6 +8,7 @@
 
 #include "analysis/Alignment.h"
 #include "decode/Decode.h"
+#include "decode/StemSet.h"
 #include "engine/Session.h"
 #include "load/AlignmentCache.h"
 
@@ -20,7 +21,8 @@ enum class LoadStage { original, stems, alignment, trackNullDepth };
 /** Loads an Original / Stem File pair so that it is usable as early as possible, in stages:
 
       1. decodeOriginal and decodeStemFile start at once, on two worker threads (the Stems themselves
-         decode on four more, see decodeStemFile()).
+         decode on four more, see decodeStemFile()). B may instead be a Stem Set (StemSource): then
+         decodeStemSet() decodes its files, concurrently too; from there on both are the same four Stems.
       2. As soon as A is decoded: onOriginalReady with an Original-only Session - play it now. If the new
          Original is the very file (path, size, mtime) of the last one delivered, it is not decoded again:
          its buffer is reused (sameOriginal = true).
@@ -46,7 +48,8 @@ public:
     struct Backend
     {
         std::function<DecodedOriginal (const juce::File&, const DecodeOptions&)> decodeOriginal;
-        std::function<DecodedStems (const juce::File&, const DecodeOptions&)> decodeStems;
+        std::function<DecodedStems (const juce::File&, const DecodeOptions&)> decodeStems;      // a Stem File
+        std::function<DecodedStems (const StemSetFiles&, const DecodeOptions&)> decodeStemSet; // a Stem Set
         AlignmentOptions alignmentOptions;
     };
 
@@ -103,8 +106,8 @@ public:
     ~PairLoader();   // cancels and waits for the workers
 
     /** Starts loading a pair: cancels any load in progress (its results are never delivered). Returns the
-        new generation. */
-    int load (const juce::File& original, const juce::File& stemFile);
+        new generation. `stems`: a Stem File (a juce::File converts) or a Stem Set. */
+    int load (const juce::File& original, const StemSource& stems);
 
     /** Cancels the load in progress without starting another. */
     void cancel();

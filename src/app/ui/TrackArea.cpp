@@ -108,7 +108,7 @@ void TrackArea::setOriginalState (bool rendering)
 void TrackArea::setStemSummaries (const std::array<SummaryPtr, numStems>& stems, SummaryPtr residual)
 {
     for (int i = 0; i < numStems; ++i)
-        stemLanes[(size_t) i]->setSummary (stems[(size_t) i]);
+        stemLanes[(size_t) i]->setSummary (stemPresent[(size_t) i] ? stems[(size_t) i] : nullptr);   // no file: no (silent) waveform
     rLane->setSummary (std::move (residual));
 }
 
@@ -125,10 +125,28 @@ void TrackArea::setStemsState (StemsState s)
         return;
     stemsState = s;
     updateStemPlaceholders();
+    updateStemDimming();
+}
 
-    const bool dim = s != StemsState::ready;
-    for (auto& h : stemHeaders)
-        h->setDimmed (dim);
+void TrackArea::setStemsPresent (const std::array<bool, numStems>& present)
+{
+    if (present == stemPresent)
+        return;
+
+    stemPresent = present;
+    for (int i = 0; i < numStems; ++i)
+        if (! stemPresent[(size_t) i])
+            stemLanes[(size_t) i]->setSummary (nullptr);
+
+    updateStemPlaceholders();
+    updateStemDimming();
+}
+
+void TrackArea::updateStemDimming()
+{
+    const bool dim = stemsState != StemsState::ready;
+    for (int i = 0; i < numStems; ++i)
+        stemHeaders[(size_t) i]->setDimmed (dim || ! stemPresent[(size_t) i]);
     rHeader->setDimmed (dim);
 }
 
@@ -165,8 +183,8 @@ void TrackArea::updateStemPlaceholders()
                                   : stemsState == StemsState::ready || stemsState == StemsState::preview
                                         ? juce::String (juce::CharPointer_UTF8 ("Rendering waveform\xe2\x80\xa6"))
                                         : juce::String();
-    for (auto& l : stemLanes)
-        l->setPlaceholder (text);
+    for (int i = 0; i < numStems; ++i)
+        stemLanes[(size_t) i]->setPlaceholder (stemPresent[(size_t) i] ? text : juce::String ("No file"));
     rLane->setPlaceholder (stemsState == StemsState::preview ? juce::String ("Needs an original") : text);
 }
 

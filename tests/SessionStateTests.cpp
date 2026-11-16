@@ -133,3 +133,59 @@ TEST_CASE ("session state: out-of-range and garbage values are clamped", "[app][
     REQUIRE (s.has_value());
     CHECK (s->masterGainDb == -60.0);
 }
+
+TEST_CASE ("session state round-trips a Stem Set (one path per Stem, empty = no file)", "[app][session][stemset]")
+{
+    auto s = sample();
+    s.stemFilePath.clear();
+    s.stemSetPaths = { juce::String ("C:/Sep/03 Heresy/drums.wav"), juce::String(),
+                       juce::String (juce::CharPointer_UTF8 ("C:/Sep/03 HÃ©rÃ©sy/other & \"x\".wav")),
+                       juce::String ("C:/Sep/03 Heresy/vocals.wav") };
+    REQUIRE (s.hasStemSet());
+
+    const auto back = roundTripThroughText (s);
+    REQUIRE (back.has_value());
+    CHECK (*back == s);
+    CHECK (back->hasStemSet());
+    CHECK (back->stemFilePath.isEmpty());
+    CHECK (back->stemSetPaths[1].isEmpty());
+
+    // A set with every slot empty is no pair at all.
+    SessionState empty;
+    empty.originalPath = "a.flac";
+    CHECK_FALSE (empty.hasStemSet());
+    CHECK_FALSE (roundTripThroughText (empty).has_value());
+}
+
+TEST_CASE ("session state: an old single Stem File path still loads", "[app][session][stemset]")
+{
+    // As older versions wrote it: no per-Stem attributes.
+    juce::XmlElement xml (SessionState::xmlTag);
+    xml.setAttribute ("original", "C:/Music/a.flac");
+    xml.setAttribute ("stemFile", "C:/Music/b.stem.m4a");
+    xml.setAttribute ("playhead", "4410");
+
+    const auto s = SessionState::fromXml (&xml);
+    REQUIRE (s.has_value());
+    CHECK (s->stemFilePath == "C:/Music/b.stem.m4a");
+    CHECK_FALSE (s->hasStemSet());
+    CHECK (s->stemSetPaths == std::array<juce::String, 4> {});
+    CHECK (s->playheadSample == 4410);
+
+    // ...and a Stem File keeps precedence over stray per-Stem attributes.
+    xml.setAttribute ("stemDrums", "C:/Music/drums.wav");
+    const auto t = SessionState::fromXml (&xml);
+    REQUIRE (t.has_value());
+    CHECK (t->stemFilePath == "C:/Music/b.stem.m4a");
+    CHECK_FALSE (t->hasStemSet());
+
+    // A Stem Set written by this version: stemFile is empty, the per-Stem attributes carry the paths.
+    juce::XmlElement set (SessionState::xmlTag);
+    set.setAttribute ("original", "C:/Music/a.flac");
+    set.setAttribute ("stemFile", "");
+    set.setAttribute ("stemVocals", "C:/Music/vocals.wav");
+    const auto u = SessionState::fromXml (&set);
+    REQUIRE (u.has_value());
+    CHECK (u->hasStemSet());
+    CHECK (u->stemSetPaths[3] == "C:/Music/vocals.wav");
+}

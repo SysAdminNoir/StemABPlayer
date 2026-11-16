@@ -12,7 +12,9 @@ set_target_properties(StemAB_R8brain PROPERTIES FOLDER "third_party")
 add_library(StemAB_Decode STATIC
     Decode.cpp
     Decode.h
-    Resample.cpp)
+    Resample.cpp
+    StemSet.cpp
+    StemSet.h)
 
 target_include_directories(StemAB_Decode PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_include_directories(StemAB_Decode SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIRS})

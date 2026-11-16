@@ -48,14 +48,14 @@ void SessionLoader::changed()
 }
 
 //==============================================================================
-void SessionLoader::load (const juce::File& original, const juce::File& stemFile)
+void SessionLoader::load (const juce::File& original, const StemSource& stems)
 {
     // Instant feedback: names and stage states now, before any audio exists. The current pair keeps
     // playing until the new Original is ready (originalReady() hands over with a fade).
     const auto keepRate = status;
     status = {};
     status.originalName = original.getFileName();
-    status.stemFileName = stemFile.getFileName();
+    status.stemFileName = stems.displayName();
     status.busy = true;
     status.original = StageState::running;
     status.stems = StageState::running;
@@ -68,7 +68,7 @@ void SessionLoader::load (const juce::File& original, const juce::File& stemFile
     updateProgress();
     changed();
 
-    pairLoader.load (original, stemFile);
+    pairLoader.load (original, stems);
 }
 
 void SessionLoader::unload()

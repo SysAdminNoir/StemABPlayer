@@ -39,7 +39,8 @@ namespace
 struct PairLoader::Job
 {
     int generation = 0;
-    juce::File originalFile, stemFile;
+    juce::File originalFile;
+    StemSource stemSource;
     FileIdentity originalId, stemId;
     std::optional<CachedAlignment> cached;
     double startMs = 0.0;
@@ -60,17 +61,19 @@ PairLoader::Backend PairLoader::defaultBackend()
     Backend b;
     b.decodeOriginal = [] (const juce::File& f, const DecodeOptions& o) { return decodeOriginal (f, o); };
     b.decodeStems    = [] (const juce::File& f, const DecodeOptions& o) { return decodeStemFile (f, o); };
+    b.decodeStemSet  = [] (const StemSetFiles& f, const DecodeOptions& o) { return decodeStemSet (f, o); };
     return b;
 }
 
 PairLoader::PairLoader (Post p, AlignmentCache* c, Backend b)
     : post (std::move (p)), cache (c), backend (std::move (b)), token (std::make_shared<Token> (Token { this })), weakToken (token)
 {
-    if (! backend.decodeOriginal || ! backend.decodeStems)
+    if (! backend.decodeOriginal || ! backend.decodeStems || ! backend.decodeStemSet)
     {
         const auto d = defaultBackend();
         if (! backend.decodeOriginal) backend.decodeOriginal = d.decodeOriginal;
         if (! backend.decodeStems)    backend.decodeStems = d.decodeStems;
+        if (! backend.decodeStemSet)  backend.decodeStemSet = d.decodeStemSet;
     }
 }
 
@@ -129,7 +132,7 @@ void PairLoader::deliver (int gen, Task task)
 }
 
 //==============================================================================
-int PairLoader::load (const juce::File& originalFile, const juce::File& stemFile)
+int PairLoader::load (const juce::File& originalFile, const StemSource& stems)
 {
     const int gen = ++ownerGeneration;
     generation.store (gen);              // older jobs see this and stop
@@ -137,9 +140,9 @@ int PairLoader::load (const juce::File& originalFile, const juce::File& stemFile
     auto job = std::make_shared<Job>();
     job->generation = gen;
     job->originalFile = originalFile;
-    job->stemFile = stemFile;
+    job->stemSource = stems;
     job->originalId = FileIdentity::of (originalFile);
-    job->stemId = FileIdentity::of (stemFile);
+    job->stemId = FileIdentity::of (stems);
     job->startMs = nowMs();
     job->cancel = [this, gen] { return generation.load (std::memory_order_relaxed) != gen; };
 
@@ -223,14 +226,18 @@ void PairLoader::startStems (std::shared_ptr<Job> job)
     addJob ([this, job]
     {
         const double t = nowMs();
-        auto decoded = backend.decodeStems (job->stemFile, DecodeOptions { job->cancel, true });
+        const bool isSet = job->stemSource.isSet();
+        const DecodeOptions options { job->cancel, true };
+        auto decoded = isSet ? backend.decodeStemSet (job->stemSource.setFiles, options)
+                             : backend.decodeStems (job->stemSource.stemFile, options);
 
         if (isCancelled (job->cancel))
             return;
 
         if (! decoded.ok)
         {
-            deliver (job->generation, [this, e = decoded.error] { if (onFailed) onFailed (LoadStage::stems, "Stem file: " + e); });
+            const juce::String what = isSet ? "Stem files: " : "Stem file: ";
+            deliver (job->generation, [this, e = what + decoded.error] { if (onFailed) onFailed (LoadStage::stems, e); });
             return;
         }
 

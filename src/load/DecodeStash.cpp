@@ -6,9 +6,8 @@ namespace stemab
 {
 
 template <typename Decoded>
-DecodeStash::Ticket DecodeStash::begin (Slot<Decoded>& slot, const juce::File& file)
+DecodeStash::Ticket DecodeStash::begin (Slot<Decoded>& slot, FileIdentity id)
 {
-    auto id = FileIdentity::of (file);      // (file system access outside the lock)
     std::optional<Decoded> dropped;         // a big buffer is freed outside the lock too
 
     Ticket ticket = 0;
@@ -60,9 +59,8 @@ void DecodeStash::abandon (Slot<Decoded>& slot, Ticket ticket)
 }
 
 template <typename Decoded>
-std::optional<Decoded> DecodeStash::take (Slot<Decoded>& slot, const juce::File& file, const CancelCheck& cancel)
+std::optional<Decoded> DecodeStash::take (Slot<Decoded>& slot, const FileIdentity& id, const CancelCheck& cancel)
 {
-    const auto id = FileIdentity::of (file);
     if (! id.isValid())
         return std::nullopt;
 
@@ -87,22 +85,23 @@ std::optional<Decoded> DecodeStash::take (Slot<Decoded>& slot, const juce::File&
 }
 
 //==============================================================================
-DecodeStash::Ticket DecodeStash::beginOriginal (const juce::File& f)        { return begin (original, f); }
+// FileIdentity::of() touches the file system: always outside the lock.
+DecodeStash::Ticket DecodeStash::beginOriginal (const juce::File& f)        { return begin (original, FileIdentity::of (f)); }
 void DecodeStash::putOriginal (Ticket t, DecodedOriginal&& d)               { put (original, t, std::move (d)); }
 void DecodeStash::abandonOriginal (Ticket t)                                { abandon (original, t); }
 
 std::optional<DecodedOriginal> DecodeStash::takeOriginal (const juce::File& f, const CancelCheck& cancel)
 {
-    return take (original, f, cancel);
+    return take (original, FileIdentity::of (f), cancel);
 }
 
-DecodeStash::Ticket DecodeStash::beginStems (const juce::File& f)           { return begin (stems, f); }
+DecodeStash::Ticket DecodeStash::beginStems (const StemSource& s)          { return begin (stems, FileIdentity::of (s)); }
 void DecodeStash::putStems (Ticket t, DecodedStems&& d)                     { put (stems, t, std::move (d)); }
 void DecodeStash::abandonStems (Ticket t)                                   { abandon (stems, t); }
 
-std::optional<DecodedStems> DecodeStash::takeStems (const juce::File& f, const CancelCheck& cancel)
+std::optional<DecodedStems> DecodeStash::takeStems (const StemSource& s, const CancelCheck& cancel)
 {
-    return take (stems, f, cancel);
+    return take (stems, FileIdentity::of (s), cancel);
 }
 
 void DecodeStash::clear()
@@ -130,6 +129,7 @@ PairLoader::Backend DecodeStash::wrap (std::shared_ptr<DecodeStash> stash, PairL
     const auto defaults = PairLoader::defaultBackend();
     auto decodeA = inner.decodeOriginal ? inner.decodeOriginal : defaults.decodeOriginal;
     auto decodeB = inner.decodeStems ? inner.decodeStems : defaults.decodeStems;
+    auto decodeSet = inner.decodeStemSet ? inner.decodeStemSet : defaults.decodeStemSet;
 
     PairLoader::Backend b = std::move (inner);
     b.decodeOriginal = [stash, decodeA] (const juce::File& f, const DecodeOptions& o) -> DecodedOriginal
@@ -143,6 +143,12 @@ PairLoader::Backend DecodeStash::wrap (std::shared_ptr<DecodeStash> stash, PairL
         if (auto d = stash->takeStems (f, o.cancel))
             return std::move (*d);
         return decodeB (f, o);
+    };
+    b.decodeStemSet = [stash, decodeSet] (const StemSetFiles& files, const DecodeOptions& o) -> DecodedStems
+    {
+        if (auto d = stash->takeStems (StemSource::fromSet (files), o.cancel))
+            return std::move (*d);
+        return decodeSet (files, o);
     };
     return b;
 }

@@ -19,7 +19,7 @@ enum class StageState { idle, running, done, failed };
 /** What the UI shows about the loaded pair. Message thread only. */
 struct LoadStatus
 {
-    juce::String originalName, stemFileName;
+    juce::String originalName, stemFileName;    // stemFileName: a Stem Set's short label (StemSource::displayName)
 
     bool busy = false;                  // A or B still on its way
     juce::String progress;              // one-line summary: "Decoding...", "Original playable - Stems...", "Ready"
@@ -71,8 +71,9 @@ public:
     SessionLoader (juce::AudioDeviceManager&, PlaybackEngine&, PairLoader::Backend backend = PairLoader::defaultBackend());
     ~SessionLoader();
 
-    /** Starts loading a pair, replacing the current one once the new Original is decoded. */
-    void load (const juce::File& original, const juce::File& stemFile);
+    /** Starts loading a pair, replacing the current one once the new Original is decoded. B is a Stem File or
+        a Stem Set. */
+    void load (const juce::File& original, const StemSource& stems);
 
     /** Back to the state before any load: the load in progress is cancelled (nothing more is delivered),
         the engine's session is cleared (a playing transport fades out first; the audio thread retires the

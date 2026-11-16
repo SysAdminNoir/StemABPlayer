@@ -9,6 +9,7 @@
 
 #include "analysis/WaveformSummary.h"
 #include "engine/Session.h"
+#include "decode/StemSet.h"
 #include "load/DecodeStash.h"
 
 namespace stemab
@@ -16,8 +17,8 @@ namespace stemab
 
 /** Waveform previews for a file chosen on its own, before the pair is complete (and so before any Session or
     Alignment exists): the file is decoded on a worker thread with the same decoders as the pair load and
-    summarised with WaveformSummary. A Stem File's preview is its four Stems as decoded - not aligned to any
-    Original (the codec delay is still in) - and has no Residual.
+    summarised with WaveformSummary. A Stem File's (or Stem Set's) preview is its four Stems as decoded - not
+    aligned to any Original (the codec delay is still in) - and has no Residual.
 
     The decoded audio goes into the DecodeStash, so when the other file is chosen the pair load takes it
     instead of decoding the file again (and waits for a preview still decoding it).
@@ -42,7 +43,7 @@ public:
 
     struct StemsResult
     {
-        juce::File file;
+        StemSource source;                  // the Stem File or Stem Set previewed
         std::array<SummaryPtr, Session::numStems> stems;   // Drums, Bass, Other, Vocals (null on failure)
         juce::int64 length = 0;
         double sampleRate = 0.0;
@@ -57,7 +58,7 @@ public:
     std::function<void (const StemsResult&)> onStemsReady;
 
     void previewOriginal (const juce::File&);
-    void previewStems (const juce::File&);
+    void previewStems (const StemSource&);
 
     void cancelOriginal();
     void cancelStems();

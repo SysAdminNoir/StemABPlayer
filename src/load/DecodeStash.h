@@ -9,6 +9,7 @@
 
 #include "decode/Decode.h"
 #include "load/AlignmentCache.h"
+#include "decode/StemSet.h"
 #include "load/PairLoader.h"
 
 namespace stemab
@@ -16,7 +17,8 @@ namespace stemab
 
 /** Hands audio decoded for a waveform preview over to the pair load, so that a file the user previewed
     (chosen before the other file of the pair) is not decoded a second time. One slot for an Original and one
-    for a Stem File, each keyed by the file's FileIdentity (path, size, modification time):
+    for the B side - a Stem File or a Stem Set - each keyed by FileIdentity (path, size, modification time; for
+    a Stem Set the identity of its ordered files, FileIdentity::of (const StemSource&)):
 
       - begin...(): a preview of that file has started. The slot now waits for it (whatever it held is
         dropped); the returned ticket names this preview.
@@ -38,10 +40,11 @@ public:
     void abandonOriginal (Ticket);
     std::optional<DecodedOriginal> takeOriginal (const juce::File&, const CancelCheck& cancel = {});
 
-    Ticket beginStems (const juce::File&);
+    /** A Stem File (a juce::File converts) or a Stem Set. */
+    Ticket beginStems (const StemSource&);
     void putStems (Ticket, DecodedStems&&);
     void abandonStems (Ticket);
-    std::optional<DecodedStems> takeStems (const juce::File&, const CancelCheck& cancel = {});
+    std::optional<DecodedStems> takeStems (const StemSource&, const CancelCheck& cancel = {});
 
     void clear();
 
@@ -61,10 +64,10 @@ private:
         std::optional<Decoded> value;
     };
 
-    template <typename Decoded> Ticket begin (Slot<Decoded>&, const juce::File&);
+    template <typename Decoded> Ticket begin (Slot<Decoded>&, FileIdentity);
     template <typename Decoded> void put (Slot<Decoded>&, Ticket, Decoded&&);
     template <typename Decoded> void abandon (Slot<Decoded>&, Ticket);
-    template <typename Decoded> std::optional<Decoded> take (Slot<Decoded>&, const juce::File&, const CancelCheck&);
+    template <typename Decoded> std::optional<Decoded> take (Slot<Decoded>&, const FileIdentity&, const CancelCheck&);
 
     mutable std::mutex mutex;
     std::condition_variable changed;

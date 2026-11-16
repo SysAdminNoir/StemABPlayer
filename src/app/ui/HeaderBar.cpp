@@ -24,7 +24,7 @@ HeaderBar::HeaderBar()
     scaleUpButton.setButtonText ("A+");
 
     openOriginalButton.setTooltip ("Open the Original (A): the mastered track");
-    openStemButton.setTooltip ("Open the Stem File (B): an NI .stem.m4a");
+    openStemButton.setTooltip ("Open B: an NI .stem.m4a, or 1 to 4 separate stem files (e.g. drums.wav, bass.wav, other.wav, vocals.wav)");
     settingsButton.setTooltip ("Preferences: folders, interface size and colors, audio device, session (Ctrl+,)");
     scaleDownButton.setTooltip ("Smaller interface (Ctrl+-)");
     scaleUpButton.setTooltip ("Larger interface (Ctrl+=); Ctrl+0 resets");
@@ -34,14 +34,14 @@ HeaderBar::HeaderBar()
     addAndMakeVisible (unloadButton);
 }
 
-void HeaderBar::setFiles (const juce::File& original, const juce::File& stemFile)
+void HeaderBar::setFiles (const juce::File& original, const StemSource& stems)
 {
-    if (original != originalFile || stemFile != stemFilePath)
+    if (original != originalFile || stems != stemSource)
     {
         originalFile = original;
-        stemFilePath = stemFile;
+        stemSource = stems;
         originalName = original.getFileName();
-        stemFileName = stemFile.getFileName();
+        stemFileName = stems.displayName();
         repaint();
     }
 }
@@ -53,7 +53,7 @@ juce::String HeaderBar::getTooltip()
     if (chipA.contains (p))
         return originalFile.getFullPathName();
     if (chipB.contains (p))
-        return stemFilePath.getFullPathName();
+        return stemSource.describePaths();
     return {};
 }
 

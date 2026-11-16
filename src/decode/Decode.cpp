@@ -1,4 +1,5 @@
 #include "decode/Decode.h"
+#include "decode/StemSet.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -919,6 +920,33 @@ DecodedOriginal decodeOriginal (const juce::File& file, const DecodeOptions& opt
         DecodedOriginal failed;
         failed.error = "Decoding failed: " + juce::String (e.what());
         return failed;
+    }
+}
+
+int countAudioStreams (const juce::File& file)
+{
+    try
+    {
+        installFfmpegLogCallbackOnce();
+
+        if (! file.existsAsFile())
+            return -1;
+
+        // The container header only (no avformat_find_stream_info): enough to count MP4 / Matroska tracks.
+        AVFormatContext* raw = nullptr;
+        if (avformat_open_input (&raw, file.getFullPathName().toUTF8(), nullptr, nullptr) < 0)
+            return -1;
+
+        const FormatPtr format (raw);
+        int n = 0;
+        for (unsigned i = 0; i < format->nb_streams; ++i)
+            if (format->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+                ++n;
+        return n;
+    }
+    catch (const std::exception&)
+    {
+        return -1;
     }
 }
 

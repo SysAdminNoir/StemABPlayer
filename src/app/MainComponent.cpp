@@ -5,6 +5,7 @@
 
 #include "Theme.h"
 #include "decode/Decode.h"
+#include "decode/StemSet.h"
 #include "engine/LiveNullDepth.h"
 #include "ui/Format.h"
 
@@ -29,6 +30,24 @@ namespace
     const juce::String minusSign (juce::CharPointer_UTF8 ("\xe2\x88\x92"));
     const juce::String rho (juce::CharPointer_UTF8 ("\xcf\x81"));
     const juce::String ellipsis (juce::CharPointer_UTF8 ("\xe2\x80\xa6"));
+
+    /** What Open A offers (any format FFmpeg decodes); Open B offers the same for single-stem files. */
+    const juce::String audioFilePatterns ("*.flac;*.wav;*.aif;*.aiff;*.aifc;*.mp3;*.m4a;*.mp4;*.aac;*.alac;*.ogg;*.oga;*.opus;*.wma;*.ape;*.wv;*.tta;*.dsf;*.dff;*.caf;*.w64;*.rf64");
+
+    bool hasStemFileName (const juce::File& f)
+    {
+        const auto name = f.getFileName().toLowerCase();
+        return name.endsWith (".stem.m4a") || name.endsWith (".stem.mp4");
+    }
+
+    /** An NI Stem File: by its name, or an .m4a / .mp4 whose container has five audio streams. */
+    bool isStemFile (const juce::File& f)
+    {
+        if (hasStemFileName (f))
+            return true;
+        const auto ext = f.getFileExtension().toLowerCase();
+        return (ext == ".m4a" || ext == ".mp4") && looksLikeStemFile (f);
+    }
 
     juce::String gainText (double db)
     {
@@ -133,12 +152,12 @@ MainComponent::MainComponent()
     };
     previews.onStemsReady = [this] (const FilePreview::StemsResult& r)
     {
-        if (r.file != stemFile || loader.getStatus().alignment == StageState::done)
+        if (r.source != stemSource || loader.getStatus().alignment == StageState::done)
             return;
 
         if (r.error.isNotEmpty())
         {
-            previewNotice = r.file.getFileName() + ": " + r.error;
+            previewNotice = r.source.displayName() + ": " + r.error;
             updateStatusText();
             return;
         }
@@ -524,7 +543,7 @@ juce::File MainComponent::chooserFolder (AppSettings::Folder folder) const
 void MainComponent::chooseOriginal()
 {
     chooser = std::make_unique<juce::FileChooser> ("Open original (A)", chooserFolder (AppSettings::Folder::originals),
-                                                   "*.flac;*.wav;*.aif;*.aiff;*.aifc;*.mp3;*.m4a;*.mp4;*.aac;*.alac;*.ogg;*.oga;*.opus;*.wma;*.ape;*.wv;*.tta;*.dsf;*.dff;*.caf;*.w64;*.rf64");
+                                                   audioFilePatterns);
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [this] (const juce::FileChooser& fc)
                           {
@@ -542,39 +561,110 @@ void MainComponent::chooseOriginal()
 
 void MainComponent::chooseStemFile()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Open stem file (B)", chooserFolder (AppSettings::Folder::stemFiles),
-                                                   "*.stem.m4a;*.m4a;*.mp4");
-    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+    chooser = std::make_unique<juce::FileChooser> ("Open B: a stem file, or 1 to 4 separate stem files",
+                                                   chooserFolder (AppSettings::Folder::stemFiles),
+                                                   "*.stem.m4a;*.stem.mp4;" + audioFilePatterns);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::canSelectMultipleItems,
                           [this] (const juce::FileChooser& fc)
                           {
-                              if (const auto f = fc.getResult(); f.existsAsFile())
+                              const auto chosen = fc.getResults();
+                              if (chosen.isEmpty())
+                                  return;     // cancelled
+
+                              juce::String error;
+                              const auto source = stemSourceFromChoice (chosen, error);
+
+                              if (source.isEmpty())
                               {
-                                  cancelResume();
-                                  settings.setLastUsedFolder (AppSettings::Folder::stemFiles, f.getParentDirectory());
-                                  stemFile = f;
-                                  previewChosenStemFile();
-                                  startLoadIfReady();
+                                  openNotice = error;   // nothing changes: the current B stays
                                   updateStatusText();
+                                  return;
                               }
+
+                              cancelResume();
+                              openNotice.clear();
+                              settings.setLastUsedFolder (AppSettings::Folder::stemFiles, source.files().getFirst().getParentDirectory());
+                              stemSource = source;
+                              applyStemPresence();
+                              previewChosenStemFile();
+                              startLoadIfReady();
+                              updateStatusText();
                           });
 }
 
-void MainComponent::loadPair (const juce::File& original, const juce::File& stems)
+StemSource MainComponent::stemSourceFromChoice (const juce::Array<juce::File>& chosen, juce::String& error)
+{
+    juce::Array<juce::File> files;
+    for (const auto& f : chosen)
+        if (f.existsAsFile())
+            files.addIfNotAlreadyThere (f);
+
+    if (files.isEmpty())
+    {
+        error = "the chosen file was not found";
+        return {};
+    }
+
+    if (files.size() == 1 && isStemFile (files.getFirst()))
+        return StemSource (files.getFirst());
+
+    for (const auto& f : files)
+    {
+        if (isStemFile (f))
+        {
+            error = f.getFileName() + " is a stem file (.stem.m4a): open it on its own, or choose 1 to 4 separate stem files";
+            return {};
+        }
+    }
+
+    const auto mapping = mapStemFiles (files);
+    if (! mapping.ok)
+    {
+        error = mapping.error;
+        return {};
+    }
+
+    return StemSource::fromSet (mapping.files);
+}
+
+void MainComponent::applyStemPresence()
+{
+    std::array<bool, Session::numStems> present {};
+    for (int i = 0; i < Session::numStems; ++i)
+    {
+        present[(size_t) i] = stemSource.isEmpty() || stemSource.hasStem (i);
+
+        // A Stem without a file is silent anyway; a Solo left on it would silence every other Stem.
+        if (! present[(size_t) i])
+        {
+            engine.setStemMuted (i, false);
+            engine.setStemSoloed (i, false);
+        }
+    }
+
+    tracks.setStemsPresent (present);
+    updateMixButtons();
+}
+
+void MainComponent::loadPair (const juce::File& original, const StemSource& stems)
 {
     cancelResume();
+    openNotice.clear();
     originalFile = original;
-    stemFile = stems;
+    stemSource = stems;
+    applyStemPresence();
     startLoadIfReady();
     updateStatusText();
 }
 
 void MainComponent::startLoadIfReady()
 {
-    if (originalFile.existsAsFile() && stemFile.existsAsFile())
+    if (originalFile.existsAsFile() && stemSource.existsAsFiles())
     {
         pairOriginal = originalFile;
-        pairStems = stemFile;
-        loader.load (originalFile, stemFile);
+        pairStems = stemSource;
+        loader.load (originalFile, stemSource);
     }
 }
 
@@ -595,13 +685,13 @@ void MainComponent::previewChosenOriginal()
 void MainComponent::previewChosenStemFile()
 {
     previewNotice.clear();
-    if (stemFile == pairStems && loader.getStatus().alignment == StageState::done)
+    if (stemSource == pairStems && loader.getStatus().alignment == StageState::done)
         return;
 
     waveforms.cancelStems();
     stemsPreviewShown = false;
     tracks.clearStemSummaries();
-    previews.previewStems (stemFile);
+    previews.previewStems (stemSource);
 }
 
 void MainComponent::setPreviewTimeline (juce::int64 length, double sampleRate)
@@ -624,7 +714,10 @@ void MainComponent::unloadAll()
     waveforms.cancelStems();
     loader.unload();
 
-    originalFile = stemFile = pairOriginal = pairStems = juce::File();
+    originalFile = pairOriginal = juce::File();
+    stemSource = pairStems = StemSource();
+    applyStemPresence();
+    openNotice.clear();
     shownSession = nullptr;
     originalSummaryReady = originalPreviewShown = stemsPreviewShown = false;
     previewLength = 0;
@@ -683,10 +776,24 @@ bool MainComponent::resumeLastSession()
     if (! saved.has_value())
         return false;
 
-    const juce::File original (saved->originalPath), stems (saved->stemFilePath);
-    if (! original.existsAsFile() || ! stems.existsAsFile())
+    const juce::File original (saved->originalPath);
+    StemSource stems;
+    if (saved->hasStemSet())
     {
-        const auto& missing = original.existsAsFile() ? stems : original;
+        StemSetFiles set;
+        for (int i = 0; i < Session::numStems; ++i)
+            if (const auto& path = saved->stemSetPaths[(size_t) i]; path.isNotEmpty())
+                set[(size_t) i] = juce::File (path);
+        stems = StemSource::fromSet (set);
+    }
+    else
+    {
+        stems = juce::File (saved->stemFilePath);
+    }
+
+    if (! original.existsAsFile() || ! stems.existsAsFiles())
+    {
+        const auto missing = original.existsAsFile() ? stems.firstMissingFile() : original;
         resumeNotice = "last session not resumed (" + missing.getFileName() + " not found)";
         updateStatusText();
         return false;
@@ -751,7 +858,7 @@ void MainComponent::updateResumeSeek()
 
 std::optional<SessionState> MainComponent::captureSessionState() const
 {
-    if (! originalFile.existsAsFile() || ! stemFile.existsAsFile())
+    if (! originalFile.existsAsFile() || ! stemSource.existsAsFiles())
         return std::nullopt;
 
     // Only once this pair's Original plays (until then the engine still reports the previous pair).
@@ -762,7 +869,16 @@ std::optional<SessionState> MainComponent::captureSessionState() const
 
     SessionState st;
     st.originalPath = originalFile.getFullPathName();
-    st.stemFilePath = stemFile.getFullPathName();
+    if (stemSource.isSet())
+    {
+        for (int i = 0; i < Session::numStems; ++i)
+            if (stemSource.hasStem (i))
+                st.stemSetPaths[(size_t) i] = stemSource.setFiles[(size_t) i].getFullPathName();
+    }
+    else
+    {
+        st.stemFilePath = stemSource.stemFile.getFullPathName();
+    }
     st.playheadSample = engine.getPlayheadSample();
     st.crossfade = engine.getCrossfade();
     st.equalPowerCurve = engine.getCurve() == Curve::EqualPower;
@@ -844,13 +960,21 @@ void MainComponent::updateStatusText()
     juce::Array<HeaderBar::Segment> left, right;
     juce::StringArray lines;   // the full detail, for the tooltip
 
+    const bool hasStemSource = stemSource.existsAsFiles();
     header.setFiles (originalFile.existsAsFile() ? originalFile : juce::File(),
-                     stemFile.existsAsFile() ? stemFile : juce::File());
+                     hasStemSource ? stemSource : StemSource());
 
     lines.add ("Original:  " + (originalFile.existsAsFile() ? originalFile.getFileName() : juce::String ("(none)"))
-               + "        Stem file:  " + (stemFile.existsAsFile() ? stemFile.getFileName() : juce::String ("(none)")));
+               + (stemSource.isSet() ? "        Stem files:  " : "        Stem file:  ")
+               + (hasStemSource ? stemSource.displayName() : juce::String ("(none)")));
 
     // Left: errors, progress, notices
+    if (openNotice.isNotEmpty())
+    {
+        left.add (seg ("Open B: " + openNotice, C::meterRed));
+        lines.add ("Open B: " + openNotice);
+    }
+
     if (st.error.isNotEmpty())
     {
         left.add (seg ("ERROR: " + st.error, C::meterRed));
@@ -859,9 +983,10 @@ void MainComponent::updateStatusText()
 
     if (st.original == StageState::idle && st.progress.isEmpty())
     {
-        const bool hasA = originalFile.existsAsFile(), hasB = stemFile.existsAsFile();
+        const bool hasA = originalFile.existsAsFile(), hasB = hasStemSource;
         const juce::String idle = hasA && ! hasB ? "Original chosen - waiting for a stem file"
-                                : hasB && ! hasA ? "Stem file chosen - waiting for an original"
+                                : hasB && ! hasA ? (stemSource.isSet() ? "Stem files chosen - waiting for an original"
+                                                                       : "Stem file chosen - waiting for an original")
                                                  : "Choose an original and a stem file";
         if (st.error.isEmpty())
             left.add (seg (idle, C::muted));
@@ -992,7 +1117,7 @@ void MainComponent::updateStatusText()
     header.setTooltip (lines.joinIntoString ("\n"));
 
     // Shown only while the timeline is empty. With one file chosen its lanes say what is happening.
-    const bool anyFile = originalFile != juce::File() || stemFile != juce::File();
+    const bool anyFile = originalFile != juce::File() || ! stemSource.isEmpty();
     tracks.setHint (st.busy && shownSession == nullptr && previewLength <= 0 ? "Decoding the original" + ellipsis
                     : anyFile ? juce::String()
                               : juce::String ("Open an original and a stem file"));
@@ -1028,8 +1153,8 @@ void MainComponent::updateMixButtons()
         soloed[(size_t) i] = engine.isStemSoloed (i);
         h.mute.setToggleState (muted[(size_t) i], juce::dontSendNotification);
         h.solo.setToggleState (soloed[(size_t) i], juce::dontSendNotification);
-        h.mute.setEnabled (stems);
-        h.solo.setEnabled (stems);
+        h.mute.setEnabled (stems && tracks.isStemPresent (i));     // a Stem Set's Stem without a file: none
+        h.solo.setEnabled (stems && tracks.isStemPresent (i));
     }
     tracks.setAudibleStems (PlaybackEngine::audibleStems (muted, soloed));
 }
@@ -1050,12 +1175,16 @@ void MainComponent::toggleResidual()
 
 void MainComponent::toggleStemSolo (int i)
 {
+    if (! tracks.isStemPresent (i))
+        return;
     engine.setStemSoloed (i, ! engine.isStemSoloed (i));
     updateMixButtons();
 }
 
 void MainComponent::toggleStemMute (int i)
 {
+    if (! tracks.isStemPresent (i))
+        return;
     engine.setStemMuted (i, ! engine.isStemMuted (i));
     updateMixButtons();
 }

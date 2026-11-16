@@ -10,6 +10,9 @@ namespace
 {
     constexpr double masterFloorDb = -60.0;     // below the fader's last dB step: silent
 
+    // A Stem Set's paths, one attribute per Stem (CONTEXT.md order).
+    constexpr const char* stemSetAttributes[SessionState::numStems] { "stemDrums", "stemBass", "stemOther", "stemVocals" };
+
     juce::String flagsToString (const std::array<bool, SessionState::numStems>& flags)
     {
         juce::String s;
@@ -48,11 +51,26 @@ namespace
     }
 }
 
+bool SessionState::hasStemSet() const
+{
+    if (stemFilePath.isNotEmpty())
+        return false;
+
+    for (const auto& p : stemSetPaths)
+        if (p.isNotEmpty())
+            return true;
+
+    return false;
+}
+
 std::unique_ptr<juce::XmlElement> SessionState::toXml() const
 {
     auto xml = std::make_unique<juce::XmlElement> (xmlTag);
     xml->setAttribute ("original", originalPath);
     xml->setAttribute ("stemFile", stemFilePath);
+    if (hasStemSet())
+        for (int i = 0; i < numStems; ++i)
+            xml->setAttribute (stemSetAttributes[i], stemSetPaths[(size_t) i]);
     xml->setAttribute ("playhead", juce::String (playheadSample));
     xml->setAttribute ("crossfade", juce::String (crossfade, 4));
     xml->setAttribute ("curve", equalPowerCurve ? "equalPower" : "linear");
@@ -73,7 +91,11 @@ std::optional<SessionState> SessionState::fromXml (const juce::XmlElement* xml)
     SessionState s;
     s.originalPath = xml->getStringAttribute ("original").trim();
     s.stemFilePath = xml->getStringAttribute ("stemFile").trim();
-    if (s.originalPath.isEmpty() || s.stemFilePath.isEmpty())
+    if (s.stemFilePath.isEmpty())
+        for (int i = 0; i < numStems; ++i)
+            s.stemSetPaths[(size_t) i] = xml->getStringAttribute (stemSetAttributes[i]).trim();
+
+    if (s.originalPath.isEmpty() || (s.stemFilePath.isEmpty() && ! s.hasStemSet()))
         return std::nullopt;
 
     s.playheadSample = juce::jmax ((juce::int64) 0, xml->getStringAttribute ("playhead", "0").getLargeIntValue());

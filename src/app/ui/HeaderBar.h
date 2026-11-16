@@ -3,6 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "app/ui/Widgets.h"
+#include "decode/StemSet.h"
 
 namespace stemab
 {
@@ -30,8 +31,9 @@ public:
     HwButton openOriginalButton, openStemButton, settingsButton, scaleDownButton, scaleUpButton;
     IconButton unloadButton { "Unload all files", IconButton::Icon::eject };
 
-    /** The chosen files (empty File = none): the screens show their names, their tooltips the full paths. */
-    void setFiles (const juce::File& original, const juce::File& stemFile);
+    /** The chosen files (empty = none): the screens show their names (a Stem Set its short label), their
+        tooltips the full paths (a Stem Set's one per line). */
+    void setFiles (const juce::File& original, const StemSource& stems);
     juce::String getTooltip() override;
     void setStatus (const juce::Array<Segment>& left, const juce::Array<Segment>& right);
     void setScaleLabel (const juce::String&);
@@ -50,7 +52,8 @@ private:
     void drawFileScreen (juce::Graphics&, juce::Rectangle<int> area, const juce::String& letter, juce::Colour letterColour,
                          const juce::String& name, const juce::String& emptyText) const;
 
-    juce::File originalFile, stemFilePath;
+    juce::File originalFile;
+    StemSource stemSource;
     juce::String originalName, stemFileName, scaleLabel { "100%" };
     juce::Array<Segment> leftStatus, rightStatus;
     juce::String statusKey;

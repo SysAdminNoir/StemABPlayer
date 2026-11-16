@@ -41,6 +41,10 @@ public:
     void setStemSummaries (const std::array<SummaryPtr, numStems>&, SummaryPtr residual);
     void clearStemSummaries();
     void setStemsState (StemsState);
+    /** Which Stems have a file (a Stem Set may have fewer than four). A Stem without one shows "No file", never
+        a waveform, and its strip stays dimmed; the owner disables its Mute / Solo. Default: all four. */
+    void setStemsPresent (const std::array<bool, numStems>&);
+    bool isStemPresent (int i) const noexcept           { return stemPresent[(size_t) i]; }
     void setAudibleStems (const std::array<bool, numStems>&);
     void setOriginalSubLabel (const juce::String&);
     void setHint (const juce::String&);
@@ -75,10 +79,12 @@ private:
     int laneHeightFor (int viewportHeight) const;
     int contentHeightFor (int laneHeight) const;
     void updateStemPlaceholders();
+    void updateStemDimming();
 
     float uiScale = 1.0f;
     bool residualAmplified = true;
     StemsState stemsState = StemsState::noSession;
+    std::array<bool, numStems> stemPresent { true, true, true, true };
     bool originalRendering = false;
 
     juce::Viewport viewport;

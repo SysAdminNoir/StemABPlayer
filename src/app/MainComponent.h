@@ -51,8 +51,9 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
 
-    /** Same as choosing both files in the dialogs (used for "Stem AB Player.exe <original> <stem file>"). */
-    void loadPair (const juce::File& original, const juce::File& stems);
+    /** Same as choosing both files in the dialogs (used for "Stem AB Player.exe <original> <stem file>"). B is
+        a Stem File (a juce::File converts) or a Stem Set. */
+    void loadPair (const juce::File& original, const StemSource& stems);
 
     /** At launch, without files on the command line: if "Resume last session on launch" is on and the saved
         pair still exists, applies the saved mix settings, loads the pair and (once A is playable) moves the
@@ -91,7 +92,13 @@ private:
     void timerCallback() override;
 
     void chooseOriginal();
+    /** Open B: one Stem File, or 1-4 separate stem files (a Stem Set, mapped to the Stems by their names). */
     void chooseStemFile();
+    /** The files chosen in the Open B dialog, as a Stem File or a Stem Set; an empty source and `error` set if
+        they cannot be used. */
+    static StemSource stemSourceFromChoice (const juce::Array<juce::File>&, juce::String& error);
+    /** The lanes and Mute / Solo of Stems without a file (a Stem Set with fewer than four). */
+    void applyStemPresence();
     void startLoadIfReady();
     /** A file chosen in a dialog: its lane(s) start over and its waveform preview starts at once (before the
         pair is complete). Not for the file the loaded pair already uses (the reload reuses that one). */
@@ -147,8 +154,11 @@ private:
     FilePreview previews { decodeStash };
     juce::String initialiseError;
 
-    juce::File originalFile, stemFile;
-    juce::File pairOriginal, pairStems;             // the pair last handed to loader.load()
+    juce::File originalFile;
+    StemSource stemSource;                          // B: a Stem File or a Stem Set
+    juce::File pairOriginal;                        // the pair last handed to loader.load()
+    StemSource pairStems;
+    juce::String openNotice;                        // why the last Open B choice was not used
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<PreferencesWindow> preferences;     // before the device's destruction (the selector listens to it)
     juce::TooltipWindow tooltips { nullptr, 600 };

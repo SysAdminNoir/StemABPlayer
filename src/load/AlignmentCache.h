@@ -6,6 +6,8 @@
 
 #include <juce_core/juce_core.h>
 
+#include "decode/StemSet.h"
+
 namespace stemab
 {
 
@@ -17,6 +19,9 @@ struct FileIdentity
     juce::int64 modifiedMs = 0;
 
     static FileIdentity of (const juce::File&);
+    /** A Stem File's identity, or one over all the files of a Stem Set (in Stem order; path "stem set:a|b||d").
+        Invalid if a set file does not exist. */
+    static FileIdentity of (const StemSource&);
     bool isValid() const noexcept                               { return path.isNotEmpty() && size >= 0; }
     bool operator== (const FileIdentity& o) const noexcept      { return path == o.path && size == o.size && modifiedMs == o.modifiedMs; }
     bool operator!= (const FileIdentity& o) const noexcept      { return ! operator== (o); }
