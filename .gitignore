@@ -42,3 +42,6 @@ CMakeUserPresets.json
 /IDEA.md
 /GUI-DE-AI-LOOK.md
 /StemABPlayer-JUCE-rebase-handoff.md
+
+# Release packages
+dist/
