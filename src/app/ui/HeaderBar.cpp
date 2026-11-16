@@ -39,14 +39,29 @@ HeaderBar::HeaderBar()
     addAndMakeVisible (unloadButton);
 }
 
-void HeaderBar::setFileNames (const juce::String& original, const juce::String& stemFile)
+void HeaderBar::setFiles (const juce::File& original, const juce::File& stemFile)
 {
-    if (original != originalName || stemFile != stemFileName)
+    if (original != originalFile || stemFile != stemFilePath)
     {
-        originalName = original;
-        stemFileName = stemFile;
+        originalFile = original;
+        stemFilePath = stemFile;
+        originalName = original.getFileName();
+        stemFileName = stemFile.getFileName();
         repaint();
     }
+}
+
+juce::String HeaderBar::getTooltip()
+{
+    // A file chip shows its full path; the status line its full detail; nothing elsewhere.
+    const auto p = getMouseXYRelative();
+    if (chipA.contains (p))
+        return originalFile.getFullPathName();
+    if (chipB.contains (p))
+        return stemFilePath.getFullPathName();
+    if (statusRow.contains (p))
+        return SettableTooltipClient::getTooltip();
+    return {};
 }
 
 juce::String HeaderBar::keyOf (const juce::Array<Segment>& segs)

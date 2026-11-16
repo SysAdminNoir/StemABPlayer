@@ -346,6 +346,53 @@ public:
         const auto cap = juce::Rectangle<float> (thumbW, thumbH).withCentre ({ sliderPos, cy });
         drawFaderCap (g, cap, crossfade ? colour (textArgb) : colour (amberArgb), crossfade ? 5.0f : 4.0f);
     }
+
+    //==============================================================================
+    // Tooltips: the UI font at the interface scale (JUCE's default is a fixed 13 px), left-aligned lines.
+    void setTooltipScale (float s) noexcept     { tooltipScale = s; }
+
+    juce::Rectangle<int> getTooltipBounds (const juce::String& tipText, juce::Point<int> screenPos,
+                                           juce::Rectangle<int> parentArea) override
+    {
+        const auto layout = layoutTooltip (tipText);
+        float textW = 0.0f;
+        for (int i = 0; i < layout.getNumLines(); ++i)
+            textW = juce::jmax (textW, layout.getLine (i).getLineBoundsX().getLength());
+
+        const int padX = scaled (10.0f, tooltipScale), padY = scaled (6.0f, tooltipScale);
+        const int w = (int) std::ceil (textW) + 2 * padX;
+        const int h = (int) std::ceil (layout.getHeight()) + 2 * padY;
+
+        return juce::Rectangle<int> (screenPos.x > parentArea.getCentreX() ? screenPos.x - (w + 12) : screenPos.x + 24,
+                                     screenPos.y > parentArea.getCentreY() ? screenPos.y - (h + 6) : screenPos.y + 6,
+                                     w, h)
+            .constrainedWithin (parentArea);
+    }
+
+    void drawTooltip (juce::Graphics& g, const juce::String& text, int width, int height) override
+    {
+        const auto bounds = juce::Rectangle<int> (width, height).toFloat();
+        g.setColour (findColour (juce::TooltipWindow::backgroundColourId));
+        g.fillRect (bounds);
+        g.setColour (findColour (juce::TooltipWindow::outlineColourId));
+        g.drawRect (bounds, 1.0f);
+
+        layoutTooltip (text).draw (g, bounds.reduced ((float) scaled (10.0f, tooltipScale), (float) scaled (6.0f, tooltipScale)));
+    }
+
+private:
+    juce::TextLayout layoutTooltip (const juce::String& text) const
+    {
+        juce::AttributedString s;
+        s.setJustification (juce::Justification::topLeft);
+        s.append (text, uiFont (em (1.0f, tooltipScale)), findColour (juce::TooltipWindow::textColourId));
+
+        juce::TextLayout layout;
+        layout.createLayout (s, 640.0f * tooltipScale);
+        return layout;
+    }
+
+    float tooltipScale = 1.0f;
 };
 
 } // namespace stemab::theme

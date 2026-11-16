@@ -28,7 +28,9 @@ public:
     juce::TextButton openOriginalButton, openStemButton, settingsButton, scaleDownButton, scaleUpButton;
     IconButton unloadButton { "Unload all files", IconButton::Icon::eject };
 
-    void setFileNames (const juce::String& original, const juce::String& stemFile);
+    /** The chosen files (empty File = none): the chips show their names, the chip tooltips their full paths. */
+    void setFiles (const juce::File& original, const juce::File& stemFile);
+    juce::String getTooltip() override;
     void setStatus (const juce::Array<Segment>& left, const juce::Array<Segment>& right);
     void setScaleLabel (const juce::String&);
     void setUiScale (float);
@@ -45,6 +47,7 @@ private:
     void drawChip (juce::Graphics&, juce::Rectangle<int> area, const juce::String& badge, juce::Colour badgeColour,
                    const juce::String& name, const juce::String& emptyText) const;
 
+    juce::File originalFile, stemFilePath;
     juce::String originalName, stemFileName, scaleLabel { "100%" };
     juce::Array<Segment> leftStatus, rightStatus;
     juce::String statusKey;

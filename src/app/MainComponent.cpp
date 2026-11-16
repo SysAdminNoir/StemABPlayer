@@ -241,6 +241,8 @@ void MainComponent::setScaleIndex (int index)
     scaleIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, index);
     const float s = uiScale();
 
+    if (auto* lf = dynamic_cast<theme::StemLookAndFeel*> (&juce::LookAndFeel::getDefaultLookAndFeel()))
+        lf->setTooltipScale (s);
     header.setUiScale (s);
     header.setScaleLabel (juce::String (juce::roundToInt (s * 100.0f)) + "%");
     header.scaleDownButton.setEnabled (scaleIndex > 0);
@@ -797,8 +799,8 @@ void MainComponent::updateStatusText()
     juce::Array<HeaderBar::Segment> left, right;
     juce::StringArray lines;   // the full detail, for the tooltip
 
-    header.setFileNames (originalFile.existsAsFile() ? originalFile.getFileName() : juce::String(),
-                         stemFile.existsAsFile() ? stemFile.getFileName() : juce::String());
+    header.setFiles (originalFile.existsAsFile() ? originalFile : juce::File(),
+                     stemFile.existsAsFile() ? stemFile : juce::File());
 
     lines.add ("Original:  " + (originalFile.existsAsFile() ? originalFile.getFileName() : juce::String ("(none)"))
                + "        Stem file:  " + (stemFile.existsAsFile() ? stemFile.getFileName() : juce::String ("(none)")));
