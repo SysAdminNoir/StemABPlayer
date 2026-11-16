@@ -32,7 +32,7 @@ ControlDeck::ControlDeck()
     loopButton.setClickingTogglesState (true);
 
     crossfadeSlider.getProperties().set ("style", "crossfade");
-    crossfadeSlider.setTooltip ("Crossfade between A (Original) and B (Stem Sum). Double-click: centre. Keys A / B / C.");
+    crossfadeSlider.setTooltip ("Crossfade between A (Original) and B (Stem Sum). Double-click: center. Keys A / B / C.");
     addAndMakeVisible (crossfadeSlider);
 
     residualButton.setButtonText ("R residual");
@@ -43,7 +43,7 @@ ControlDeck::ControlDeck()
     curveButton.setTooltip ("Crossfade curve: Equal-power (lit) or Linear (unlit)");
     curveButton.setLitColours (C::amber, C::inkPad);
 
-    centreButton.setButtonText ("Centre");
+    centreButton.setButtonText ("Center");
     centreButton.setTooltip ("Crossfade to A 50 / B 50 (C)");
 
     for (auto* b : { &residualButton, &curveButton, &centreButton })

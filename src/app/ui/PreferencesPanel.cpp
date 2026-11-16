@@ -38,7 +38,7 @@ namespace
         switch (s)
         {
             case PreferencesPanel::Section::folders:   return "Where the Open dialogs start";
-            case PreferencesPanel::Section::interface: return "Text and control size, colours";
+            case PreferencesPanel::Section::interface: return "Text and control size, colors";
             case PreferencesPanel::Section::audio:     return "Output device, sample rate and buffer size";
             case PreferencesPanel::Section::session:   return "What comes back when the app starts";
         }
@@ -157,16 +157,16 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
     styleNote (sizeNote);
     interfacePage.addAndMakeVisible (sizeNote);
 
-    paletteCaption.setText ("COLOUR PALETTE", juce::dontSendNotification);
+    paletteCaption.setText ("COLOR PALETTE", juce::dontSendNotification);
     styleCaption (paletteCaption);
     interfacePage.addAndMakeVisible (paletteCaption);
 
     const AppSettings::Palette palettes[2] { AppSettings::Palette::standard, AppSettings::Palette::colourBlindSafe };
     paletteButtons[0].setButtonText ("Standard");
-    paletteButtons[1].setButtonText (juce::String (juce::CharPointer_UTF8 ("Colour-blind safe (red\xe2\x80\x93green)")));
-    paletteButtons[0].setTooltip ("The standard colours: green / amber / red meters and pads");
-    paletteButtons[1].setTooltip ("Colours told apart without red-green vision: blue / yellow / vermilion meters, "
-                                  "Okabe-Ito stem colours");
+    paletteButtons[1].setButtonText (juce::String (juce::CharPointer_UTF8 ("Color-blind safe (red\xe2\x80\x93green)")));
+    paletteButtons[0].setTooltip ("The standard colors: green / amber / red meters and pads");
+    paletteButtons[1].setTooltip ("Colors told apart without red-green vision: blue / yellow / vermilion meters, "
+                                  "Okabe-Ito stem colors");
     for (int i = 0; i < (int) paletteButtons.size(); ++i)
     {
         auto& b = paletteButtons[(size_t) i];
@@ -183,8 +183,8 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
         interfacePage.addAndMakeVisible (b);
     }
 
-    paletteNote.setText ("Colour-blind safe replaces the red / green pairs (meters, Play, Mute, the Residual and the "
-                         "stem colours) with hues that stay distinct for protanopia and deuteranopia. "
+    paletteNote.setText ("Color-blind safe replaces the red / green pairs (meters, Play, Mute, the Residual and the "
+                         "stem colors) with hues that stay distinct for protanopia and deuteranopia. "
                          "It applies at once to the main window and here.", juce::dontSendNotification);
     styleNote (paletteNote);
     interfacePage.addAndMakeVisible (paletteNote);

@@ -25,7 +25,7 @@ HeaderBar::HeaderBar()
 
     openOriginalButton.setTooltip ("Open the Original (A): the mastered track");
     openStemButton.setTooltip ("Open the Stem File (B): an NI .stem.m4a");
-    settingsButton.setTooltip ("Preferences: folders, interface size and colours, audio device, session (Ctrl+,)");
+    settingsButton.setTooltip ("Preferences: folders, interface size and colors, audio device, session (Ctrl+,)");
     scaleDownButton.setTooltip ("Smaller interface (Ctrl+-)");
     scaleUpButton.setTooltip ("Larger interface (Ctrl+=); Ctrl+0 resets");
 
@@ -48,14 +48,12 @@ void HeaderBar::setFiles (const juce::File& original, const juce::File& stemFile
 
 juce::String HeaderBar::getTooltip()
 {
-    // A file screen shows its full path; the status line its full detail; nothing elsewhere.
+    // A file screen shows its full path; nothing elsewhere (the status line has no tooltip).
     const auto p = getMouseXYRelative();
     if (chipA.contains (p))
         return originalFile.getFullPathName();
     if (chipB.contains (p))
         return stemFilePath.getFullPathName();
-    if (statusRow.contains (p))
-        return SettableTooltipClient::getTooltip();
     return {};
 }
 

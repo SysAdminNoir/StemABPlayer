@@ -403,9 +403,9 @@ void StemLookAndFeel::applyPalette()
     setColour (juce::ListBox::backgroundColourId,         colour (C::screen));
     setColour (juce::ListBox::outlineColourId,            colour (C::screenLine));
     setColour (juce::ListBox::textColourId,               colour (C::screenText));
-    setColour (juce::TooltipWindow::backgroundColourId,   colour (C::panel));
-    setColour (juce::TooltipWindow::textColourId,         colour (C::text));
-    setColour (juce::TooltipWindow::outlineColourId,      colour (C::panelHi));
+    setColour (juce::TooltipWindow::backgroundColourId,   colour (C::text));
+    setColour (juce::TooltipWindow::textColourId,         colour (C::inkPad));
+    setColour (juce::TooltipWindow::outlineColourId,      colour (C::panelEdge));
 }
 
 juce::Font StemLookAndFeel::getTextButtonFont (juce::TextButton&, int buttonHeight)
@@ -625,6 +625,7 @@ juce::Rectangle<int> StemLookAndFeel::getTooltipBounds (const juce::String& tipT
 
 void StemLookAndFeel::drawTooltip (juce::Graphics& g, const juce::String& text, int width, int height)
 {
+    // Light box, dark text: stands apart from the dark panels without needing a shadow.
     const auto bounds = juce::Rectangle<int> (width, height).toFloat();
     g.setColour (findColour (juce::TooltipWindow::backgroundColourId));
     g.fillRect (bounds);
