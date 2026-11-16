@@ -84,6 +84,13 @@ ctest --preset release
 | [docs/adr/](docs/adr/) | Architecture decision records |
 | [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) | Licenses of the libraries and fonts used |
 
+## License
+
+Stem A/B Player is licensed under the **GNU Affero General Public License v3.0** — see [LICENSE](LICENSE).
+The libraries and fonts it uses have their own licenses, listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Release builds that include ASIO support are for personal
+use only, under Steinberg's ASIO SDK terms.
+
 ## Project layout
 
 ```
