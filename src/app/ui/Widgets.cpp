@@ -101,14 +101,14 @@ void HwButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     else
         theme::drawKey (g, face, s, highlighted, down, isEnabled());
 
-    auto text = face;
+    auto label = face;
     if (down)
-        text = text.translated (0.0f, juce::jmax (1.0f, s));
+        label = label.translated (0.0f, juce::jmax (1.0f, s));
 
     const auto ink = lit ? colour (litInk) : kind == Kind::pad ? colour (C::muted) : colour (C::text);
     g.setColour (ink.withMultipliedAlpha (isEnabled() ? 1.0f : 0.45f));
     g.setFont (theme::uiFont (fontPx * s, kind == Kind::pad ? theme::Weight::extraBold : theme::Weight::semiBold));
-    g.drawFittedText (getButtonText(), text.reduced (4.0f * s, 0.0f).toNearestInt(), juce::Justification::centred, 1, 0.9f);
+    g.drawFittedText (getButtonText(), label.reduced (4.0f * s, 0.0f).toNearestInt(), juce::Justification::centred, 1, 0.9f);
 }
 
 //==============================================================================
