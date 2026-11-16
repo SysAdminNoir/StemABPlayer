@@ -1,7 +1,11 @@
 juce_add_gui_app(StemAB_App
     PRODUCT_NAME "Stem AB Player"
     COMPANY_NAME "StemAB"
-    VERSION      ${PROJECT_VERSION})
+    VERSION      ${PROJECT_VERSION}
+    # App icon ("Monogram key"), rendered by tools/make-icon.ps1. JUCE builds the exe's .ico from these;
+    # the window's title bar and the taskbar take it from the exe.
+    ICON_BIG     "${CMAKE_SOURCE_DIR}/resources/icon/icon-512.png"
+    ICON_SMALL   "${CMAKE_SOURCE_DIR}/resources/icon/icon-64.png")
 
 target_sources(StemAB_App PRIVATE
     AppSettings.cpp
