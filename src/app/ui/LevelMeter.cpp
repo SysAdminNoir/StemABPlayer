@@ -7,15 +7,12 @@
 namespace stemab
 {
 
-LevelMeter::LevelMeter (Orientation o, juce::Colour solid)
-    : orientation (o), solidColour (solid), background (theme::colour (theme::groundArgb))
+LevelMeter::LevelMeter (Orientation o) : orientation (o)
 {
     setInterceptsMouseClicks (false, false);
 }
 
 void LevelMeter::setOrientation (Orientation o)  { orientation = o; repaint(); }
-void LevelMeter::setSolidColour (juce::Colour c)       { solidColour = c; repaint(); }
-void LevelMeter::setBackgroundColour (juce::Colour c)  { background = c; repaint(); }
 
 void LevelMeter::reset()
 {
@@ -23,9 +20,38 @@ void LevelMeter::reset()
     repaint();
 }
 
+int LevelMeter::extent() const noexcept
+{
+    return orientation == Orientation::vertical ? getHeight() : getWidth();
+}
+
+int LevelMeter::cellsFor (int length) noexcept
+{
+    // 1 px gaps; each cell at least 2 px.
+    for (const int n : { theme::ledCells, 20, 12, 10, 6 })
+        if (length - (n - 1) >= 2 * n)
+            return n;
+    return 4;
+}
+
+LevelMeter::Cells LevelMeter::cellsToShow (int n) const noexcept
+{
+    const float cellDb = -theme::meterFloorDb / (float) n;
+    const auto cellsAt = [&] (float linear)
+    {
+        const float db = theme::gainToDb (linear);
+        return (int) std::ceil ((db - theme::meterFloorDb) / cellDb);
+    };
+
+    Cells c;
+    c.lit = juce::jlimit (0, n, cellsAt (shownRms));
+    c.peak = shownPeak > 1.0f ? n - 1 : shownPeak > 0.0f ? juce::jlimit (-1, n - 1, cellsAt (shownPeak) - 1) : -1;
+    return c;
+}
+
 void LevelMeter::setLevels (float peak, float rms)
 {
-    // Peak tick: a new peak holds for peakHoldMs, then falls back at peakFallDbPerSec. RMS follows directly.
+    // Peak cell: a new peak holds for peakHoldMs, then falls back at peakFallDbPerSec. RMS follows directly.
     const double now = juce::Time::getMillisecondCounterHiRes();
     const double dt = lastUpdateMs > 0.0 ? juce::jlimit (0.0, 250.0, now - lastUpdateMs) : 0.0;
     lastUpdateMs = now;
@@ -44,61 +70,31 @@ void LevelMeter::setLevels (float peak, float rms)
         shownPeak = 0.0f;
     shownRms = rms;
 
-    const float p = theme::meterProportion (shownPeak) + (shownPeak > 1.0f ? 1.0f : 0.0f);
-    const float r = theme::meterProportion (shownRms);
-    const float extent = (float) juce::jmax (1, orientation == Orientation::vertical ? getHeight() : getWidth());
-
-    // Repaint only for a visible change (about half a pixel).
-    if (std::abs (p - paintedPeak) * extent >= 0.5f || std::abs (r - paintedRms) * extent >= 0.5f)
+    // Repaint only when a cell changes.
+    const auto c = cellsToShow (cellsFor (extent()));
+    if (c.lit != painted.lit || c.peak != painted.peak)
         repaint();
 }
 
 void LevelMeter::paint (juce::Graphics& g)
 {
-    const auto r = getLocalBounds().toFloat();
     const bool vertical = orientation == Orientation::vertical;
-    const float corner = juce::jmin (2.0f, juce::jmin (r.getWidth(), r.getHeight()) * 0.4f);
+    const int length = extent();
+    const int n = cellsFor (length);
+    const float cellDb = -theme::meterFloorDb / (float) n;
+    painted = cellsToShow (n);
 
-    g.setColour (background);
-    g.fillRoundedRectangle (r, corner);
+    // Cell i spans [edge (i), edge (i + 1) - 1): whole pixels, 1 px gaps.
+    const auto edge = [&] (int i) { return juce::roundToInt ((float) i * (float) (length + 1) / (float) n); };
+    const auto across = vertical ? getWidth() : getHeight();
 
-    paintedPeak = theme::meterProportion (shownPeak) + (shownPeak > 1.0f ? 1.0f : 0.0f);
-    paintedRms = theme::meterProportion (shownRms);
-
-    const auto portion = [&] (float proportion)
+    for (int i = 0; i < n; ++i)
     {
-        return vertical ? r.withTop (r.getBottom() - r.getHeight() * proportion)
-                        : r.withWidth (r.getWidth() * proportion);
-    };
-
-    if (solidColour.isTransparent())
-        g.setGradientFill (vertical ? theme::meterGradient (r.getBottomLeft(), r.getTopLeft())
-                                    : theme::meterGradient (r.getTopLeft(), r.getTopRight()));
-    else
-        g.setColour (solidColour);
-
-    const float rmsP = theme::meterProportion (shownRms);
-    if (rmsP > 0.0f)
-        g.fillRoundedRectangle (portion (rmsP), corner);
-
-    if (shownPeak > 0.0f)
-    {
-        const float peakP = theme::meterProportion (shownPeak);
-        const bool clipped = shownPeak > 1.0f;
-        const float tick = 2.0f;
-        juce::Rectangle<float> t;
-        if (vertical)
-            t = { r.getX(), juce::jmax (r.getY(), r.getBottom() - r.getHeight() * peakP - tick * 0.5f), r.getWidth(), tick };
-        else
-            t = { juce::jmin (r.getRight() - tick, r.getX() + r.getWidth() * peakP - tick * 0.5f), r.getY(), tick, r.getHeight() };
-
-        if (clipped)
-            g.setColour (theme::colour (theme::meterClipArgb));
-        else if (solidColour.isTransparent())
-            g.setColour (theme::colour (theme::textArgb).withAlpha (0.85f));
-        else
-            g.setColour (solidColour.brighter (0.5f));
-        g.fillRect (t);
+        const int a = edge (i), b = edge (i + 1) - 1;
+        const auto cell = vertical ? juce::Rectangle<int> (0, length - b, across, b - a)
+                                   : juce::Rectangle<int> (a, 0, b - a, across);
+        const bool lit = i < painted.lit || i == painted.peak;
+        theme::drawLedCell (g, cell.toFloat(), lit, theme::ledColour (theme::meterFloorDb + (float) i * cellDb), ! vertical);
     }
 }
 

@@ -31,12 +31,18 @@ public:
         static constexpr const char* resumeSession      = "resumeSession";       // bool (default true)
         static constexpr const char* session            = "session";             // XML (SessionState)
         static constexpr const char* windowState        = "windowState";         // ResizableWindow::getWindowStateAsString
+        static constexpr const char* colourPalette      = "colourPalette";       // "standard" (default) | "colourBlindSafe"
     };
 
     /** Which file chooser a folder belongs to. */
     enum class Folder { originals, stemFiles };
 
+    /** The interface colours: the standard palette or the red-green colour-blind safe one. */
+    enum class Palette { standard, colourBlindSafe };
+
     AppSettings();
+    /** Settings kept in `file` instead of %APPDATA% (tests). Written only by save() and on destruction. */
+    explicit AppSettings (const juce::File& file);
 
     juce::File getFile() const;
     void save();
@@ -66,11 +72,15 @@ public:
     juce::String getWindowState() const;
     void setWindowState (const juce::String&);
 
+    Palette getColourPalette() const;
+    void setColourPalette (Palette);
+
 private:
     juce::PropertiesFile* props() const;
     static juce::File fileFromSetting (const juce::String&);
 
     mutable juce::ApplicationProperties properties;
+    std::unique_ptr<juce::PropertiesFile> fileOverride;     // AppSettings (const File&)
 
     JUCE_DECLARE_NON_COPYABLE (AppSettings)
 };

@@ -1,15 +1,26 @@
 #include "app/ui/WaveformLane.h"
 
+#include <vector>
+
 #include "app/Theme.h"
 
 namespace stemab
 {
 
-WaveformLane::WaveformLane (juce::Colour wave, juce::Colour bg, bool drawCentreLine)
-    : waveColour (wave), background (bg), centreLine (drawCentreLine)
+WaveformLane::WaveformLane (juce::Colour wave, Look l)
+    : waveColour (wave), look (l)
 {
-    setOpaque (true);
+    setOpaque (false);
     setInterceptsMouseClicks (false, false);
+}
+
+void WaveformLane::setColour (juce::Colour c)
+{
+    if (c == waveColour)
+        return;
+    waveColour = c;
+    cacheValid = false;
+    repaint();
 }
 
 void WaveformLane::setSummary (std::shared_ptr<const WaveformSummary> s)
@@ -88,62 +99,65 @@ void WaveformLane::renderCache()
     const float half = juce::jmax (1.0f, centre - pad);
     const double length = (double) summary->getLength();
 
-    const auto peakColour = waveColour.withAlpha (0.35f);
-    const auto rmsColour = waveColour;
-
+    // Per-column peak and RMS heights, then the mirrored outlines.
+    std::vector<float> pk ((size_t) w), rm ((size_t) w);
     for (int x = 0; x < w; ++x)
     {
         const auto start = (juce::int64) (length * x / w);
         const auto end = juce::jmax (start + 1, (juce::int64) (length * (x + 1) / w));
         const auto level = summary->getLevel (start, end);
-
-        const float pk = juce::jmin (1.0f, level.peak * displayGain) * half;
-        const float rm = juce::jmin (1.0f, level.rms * displayGain) * half;
-
-        if (pk > 0.0f)
-        {
-            g.setColour (peakColour);
-            g.fillRect (juce::Rectangle<float> ((float) x, centre - pk, 1.0f, juce::jmax (1.0f, 2.0f * pk)));
-        }
-        if (rm > 0.0f)
-        {
-            g.setColour (rmsColour);
-            g.fillRect (juce::Rectangle<float> ((float) x, centre - rm, 1.0f, juce::jmax (1.0f, 2.0f * rm)));
-        }
+        pk[(size_t) x] = juce::jmin (1.0f, level.peak * displayGain) * half;
+        rm[(size_t) x] = juce::jmin (1.0f, level.rms * displayGain) * half;
     }
+
+    const auto mirrored = [&] (const std::vector<float>& v)
+    {
+        juce::Path p;
+        p.startNewSubPath (0.0f, centre - v[0]);
+        for (int x = 0; x < w; ++x)
+            p.lineTo ((float) x + 0.5f, centre - v[(size_t) x]);
+        p.lineTo ((float) w, centre - v[(size_t) w - 1]);
+        p.lineTo ((float) w, centre + v[(size_t) w - 1]);
+        for (int x = w; --x >= 0;)
+            p.lineTo ((float) x + 0.5f, centre + v[(size_t) x]);
+        p.lineTo (0.0f, centre + v[0]);
+        p.closeSubPath();
+        return p;
+    };
+
+    if (look == Look::filledPeak)
+    {
+        g.setColour (waveColour.withAlpha (0.6f));
+        g.fillPath (mirrored (pk));
+        return;
+    }
+
+    g.setColour (waveColour.withAlpha (0.35f));
+    g.fillPath (mirrored (rm));
+    g.setColour (waveColour);
+    g.strokePath (mirrored (pk), juce::PathStrokeType (juce::jmax (1.0f, cacheScale), juce::PathStrokeType::mitered));
 }
 
 void WaveformLane::paint (juce::Graphics& g)
 {
     const auto bounds = getLocalBounds();
-    g.fillAll (background);
 
     if (! cacheValid
         || (cache.isValid() && cacheScale != juce::jmax (1.0f, juce::Component::getApproximateScaleFactorForComponent (this))))
         renderCache();
 
-    if (centreLine)
-    {
-        g.setColour (juce::Colours::white.withAlpha (0.07f));
-        g.fillRect (0, bounds.getHeight() / 2, bounds.getWidth(), 1);
-    }
-
     if (cache.isValid())
     {
         g.setOpacity (faded ? 0.22f : 1.0f);
-        g.drawImage (cache, bounds.toFloat(),juce::RectanglePlacement::stretchToFit);
+        g.drawImage (cache, bounds.toFloat(), juce::RectanglePlacement::stretchToFit);
         g.setOpacity (1.0f);
     }
     else if (placeholder.isNotEmpty())
     {
-        g.setColour (theme::colour (theme::mutedTextArgb).withAlpha (0.8f));
-        g.setFont (theme::uiFont (theme::em (0.72f, uiScale)));
+        g.setColour (theme::colour (theme::C::screenDim));
+        g.setFont (theme::monoFont (11.0f * uiScale));
         g.drawText (placeholder, bounds.reduced (theme::scaled (12.0f, uiScale), 0), juce::Justification::centredLeft, true);
     }
-
-    // Bottom hairline (the lane separators)
-    g.setColour (theme::colour (theme::hairlineArgb));
-    g.fillRect (0, bounds.getHeight() - 1, bounds.getWidth(), 1);
 }
 
 } // namespace stemab

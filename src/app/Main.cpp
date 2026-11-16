@@ -14,7 +14,7 @@ class MainWindow final : public juce::DocumentWindow
 public:
     explicit MainWindow (const juce::String& commandLine)
         : juce::DocumentWindow ("Stem A/B",
-                                juce::Colour (theme::windowArgb),
+                                theme::colour (theme::C::ground),
                                 juce::DocumentWindow::allButtons)
     {
         setUsingNativeTitleBar (true);
@@ -123,6 +123,7 @@ public:
         mainWindow.reset();
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
         lookAndFeel.reset();
+        theme::releaseFonts();
     }
 
     void systemRequestedQuit() override

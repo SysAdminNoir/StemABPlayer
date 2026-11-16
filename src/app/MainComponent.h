@@ -116,6 +116,8 @@ private:
 
     void setScaleIndex (int index);
     float uiScale() const noexcept;
+    /** Saves and applies a colour palette: the theme, the LookAndFeel, the waveform images, every window. */
+    void setPalette (AppSettings::Palette);
 
     /** The repo's "Audio Files" / "Stem Files" when present (next to the sources or above the exe), else the
         user's Music folder. */

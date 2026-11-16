@@ -5,8 +5,8 @@
 namespace stemab
 {
 
-/** The time ruler above the waveform lanes: a tick and an m:ss label every 30 s (coarser when the ticks
-    would crowd). Clicks pass through to the PlayheadOverlay above it. */
+/** The time ruler at the top of the waveform screen (transparent): a short tick and an m:ss label every 30 s
+    (coarser when the labels would crowd). Clicks pass through to the PlayheadOverlay above it. */
 class TimeRuler final : public juce::Component
 {
 public:

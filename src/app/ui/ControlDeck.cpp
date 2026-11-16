@@ -2,31 +2,23 @@
 
 #include <cmath>
 
-#include "app/Theme.h"
-
 namespace stemab
 {
+
+using theme::C;
+using theme::colour;
 
 namespace
 {
     const juce::String middleDot (juce::CharPointer_UTF8 ("\xc2\xb7"));
 
     // Base metrics at 100 % (the mockup)
-    constexpr float padXPx = 20.0f, padYPx = 14.0f, groupGapPx = 24.0f;
-    constexpr float iconButtonPx = 40.0f, playButtonPx = 58.0f, buttonGapPx = 6.0f;
-    constexpr float timeBoxMinPx = 150.0f;
-    constexpr float masterColumnPx = 210.0f, clipPx = 54.0f;
-    constexpr float minCrossfadePx = 320.0f;
-
-    void styleDeckButton (juce::TextButton& b, juce::uint32 onFill, juce::uint32 onText, juce::uint32 offText)
-    {
-        b.setClickingTogglesState (false);
-        b.setColour (juce::TextButton::buttonColourId, theme::colour (theme::raisedArgb));
-        b.setColour (juce::TextButton::buttonOnColourId, theme::colour (onFill));
-        b.setColour (juce::TextButton::textColourOnId, theme::colour (onText));
-        b.setColour (juce::TextButton::textColourOffId, theme::colour (offText));
-        b.getProperties().set ("fontRatio", 0.35);
-    }
+    constexpr float padXPx = 18.0f, padYPx = 16.0f, columnGapPx = 26.0f;
+    constexpr float transportPx = 380.0f, masterPx = 250.0f, minCrossfadePx = 300.0f;
+    constexpr float timeScreenPx = 58.0f, rowGapPx = 12.0f;
+    constexpr float keyWPx = 52.0f, playWPx = 76.0f, keyHPx = 44.0f, keyGapPx = 8.0f;
+    constexpr float silkRowPx = 14.0f, faderPx = 44.0f, padRowPx = 30.0f;
+    constexpr float knobBoxPx = 100.0f, clipPx = 44.0f, labelGapPx = 8.0f;
 }
 
 ControlDeck::ControlDeck()
@@ -41,31 +33,28 @@ ControlDeck::ControlDeck()
     crossfadeSlider.setTooltip ("Crossfade between A (Original) and B (Stem Sum). Double-click: centre. Keys A / B / C.");
     addAndMakeVisible (crossfadeSlider);
 
-    residualButton.setButtonText (juce::String ("R ") + middleDot + " Residual");
+    residualButton.setButtonText ("R residual");
     residualButton.setTooltip ("Listen to the Residual: A minus all four Stems (R)");
-    styleDeckButton (residualButton, theme::residualArgb, theme::groundArgb, theme::buttonTextArgb);
+    residualButton.setLitColours (C::accent, C::text);
 
-    curveButton.setButtonText ("Equal-power");
-    curveButton.setTooltip ("Crossfade curve: Equal-power (on) or Linear (off)");
-    styleDeckButton (curveButton, theme::toggleOnArgb, 0xffffffff, theme::mutedTextArgb);
+    curveButton.setButtonText ("Equal power");
+    curveButton.setTooltip ("Crossfade curve: Equal-power (lit) or Linear (unlit)");
+    curveButton.setLitColours (C::amber, C::inkPad);
 
     centreButton.setButtonText ("Centre");
     centreButton.setTooltip ("Crossfade to A 50 / B 50 (C)");
-    styleDeckButton (centreButton, theme::raisedArgb, theme::buttonTextArgb, theme::buttonTextArgb);
 
     for (auto* b : { &residualButton, &curveButton, &centreButton })
-        addAndMakeVisible (b);
-
-    masterSlider.getProperties().set ("style", "fader");
-    masterSlider.setTooltip ("Master Gain (double-click: 0 dB). It never goes above 0 dB.");
-    addAndMakeVisible (masterSlider);
-
-    for (auto& m : outMeters)
     {
-        m.setOrientation (LevelMeter::Orientation::horizontal);
-        m.setBackgroundColour (theme::colour (theme::raisedArgb));
-        addAndMakeVisible (m);
+        b->setClickingTogglesState (false);
+        addAndMakeVisible (b);
     }
+
+    masterSlider.getProperties().set ("style", "knob");
+    masterSlider.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+    masterSlider.setMouseDragSensitivity (220);
+    masterSlider.setTooltip ("Master Gain: drag or scroll (double-click: 0 dB). It never goes above 0 dB.");
+    addAndMakeVisible (masterSlider);
 
     addAndMakeVisible (clipButton);
 }
@@ -94,11 +83,10 @@ void ControlDeck::setCrossfadeDimmed (bool d)
     if (d == crossfadeDimmed)
         return;
     crossfadeDimmed = d;
-    // The R button stays bright: it is how you leave Residual.
+    // The R pad stays bright: it is how you leave Residual.
     for (auto* c : std::initializer_list<juce::Component*> { &crossfadeSlider, &curveButton, &centreButton })
         c->setAlpha (d ? 0.45f : 1.0f);
     repaint (xfLabelRow);
-    repaint (hintArea);
 }
 
 void ControlDeck::setGainText (const juce::String& s)
@@ -106,7 +94,7 @@ void ControlDeck::setGainText (const juce::String& s)
     if (s != gainText)
     {
         gainText = s;
-        repaint (masterLabelRow);
+        repaint (masterLabel);
     }
 }
 
@@ -115,14 +103,16 @@ void ControlDeck::setUiScale (float s)
     uiScale = s;
     for (auto* b : { &toStartButton, &backButton, &playButton, &forwardButton, &loopButton })
         b->setUiScale (s);
+    for (auto* b : { &residualButton, &curveButton, &centreButton })
+        b->setUiScale (s);
     clipButton.setUiScale (s);
 
-    crossfadeSlider.getProperties().set ("thumbW", theme::scaled (22.0f, s));
-    crossfadeSlider.getProperties().set ("thumbH", theme::scaled (38.0f, s));
-    masterSlider.getProperties().set ("thumbW", theme::scaled (16.0f, s));
-    masterSlider.getProperties().set ("thumbH", theme::scaled (28.0f, s));
+    crossfadeSlider.getProperties().set ("thumbW", theme::scaled (26.0f, s));
+    crossfadeSlider.getProperties().set ("thumbH", theme::scaled (42.0f, s));
+    crossfadeSlider.getProperties().set ("uiScale", (double) s);
+    masterSlider.getProperties().set ("uiScale", (double) s);
     crossfadeSlider.sendLookAndFeelChange();   // re-runs the slider layout with the new thumb indent
-    masterSlider.sendLookAndFeelChange();
+    masterSlider.repaint();
 
     resized();
     repaint();
@@ -131,24 +121,16 @@ void ControlDeck::setUiScale (float s)
 ControlDeck::Metrics ControlDeck::metrics() const
 {
     const auto s = uiScale;
+    const auto px = [s] (float v) { return theme::scaled (v, s); };
     Metrics m {};
-    m.padX = theme::scaled (padXPx, s);
-    m.padY = theme::scaled (padYPx, s);
-    m.gap = theme::scaled (groupGapPx, s);
-
-    const auto timeFont = theme::monoFont (theme::em (1.55f, s), true);
-    const int timeW = juce::jmax (theme::scaled (timeBoxMinPx, s),
-                                  (int) std::ceil (juce::GlyphArrangement::getStringWidth (timeFont, "00:00.000")) + theme::scaled (24.0f, s));
-    m.transportW = 4 * theme::scaled (iconButtonPx, s) + theme::scaled (playButtonPx, s) + 4 * theme::scaled (buttonGapPx, s)
-                   + theme::scaled (16.0f, s) + timeW;
-    m.masterW = theme::scaled (14.0f + masterColumnPx + 14.0f + clipPx + 14.0f, s);
-
-    const int labelH = juce::roundToInt (theme::uiFont (theme::em (0.72f, s), true).getHeight());
-    m.xfH = labelH + theme::scaled (6.0f + 40.0f + 6.0f + 30.0f, s);
-
-    const int gainH = juce::roundToInt (theme::monoFont (theme::em (0.95f, s), true).getHeight());
-    m.masterH = theme::scaled (20.0f, s) + gainH + theme::scaled (4.0f + 32.0f + 4.0f + 5.0f + 3.0f + 5.0f, s);
-    m.rowH = juce::jmax (theme::scaled (playButtonPx, s), m.masterH);
+    m.padX = px (padXPx);
+    m.padY = px (padYPx);
+    m.gap = px (columnGapPx);
+    m.transportW = px (transportPx);
+    m.masterW = px (masterPx);
+    m.transportH = px (timeScreenPx + rowGapPx + keyHPx + 2.0f);
+    m.xfH = px (silkRowPx + rowGapPx + faderPx + rowGapPx + padRowPx + 2.0f);
+    m.masterH = px (knobBoxPx + labelGapPx + silkRowPx);
     return m;
 }
 
@@ -162,16 +144,16 @@ int ControlDeck::getPreferredHeight (int width) const
 {
     const auto m = metrics();
     if (needsTwoRows (width))
-        return 2 * m.padY + m.xfH + m.padY + m.rowH;
-    return 2 * m.padY + juce::jmax (m.rowH, m.xfH);
+        return 2 * m.padY + m.xfH + m.padY + juce::jmax (m.transportH, m.masterH);
+    return 2 * m.padY + juce::jmax (m.transportH, m.xfH, m.masterH);
 }
 
 void ControlDeck::resized()
 {
     const auto s = uiScale;
+    const auto px = [s] (float v) { return theme::scaled (v, s); };
     const auto m = metrics();
     auto area = getLocalBounds().reduced (m.padX, m.padY);
-    area.removeFromTop (1);   // top border
 
     juce::Rectangle<int> transportArea, crossfadeArea, masterArea;
     if (needsTwoRows (getWidth()))
@@ -190,139 +172,141 @@ void ControlDeck::resized()
         crossfadeArea = area;
     }
 
-    // 1. Transport
+    // 1. Transport: the time screen, then the keys
     {
-        auto r = transportArea.withSizeKeepingCentre (transportArea.getWidth(), theme::scaled (playButtonPx, s));
-        const int ib = theme::scaled (iconButtonPx, s), pb = theme::scaled (playButtonPx, s), bg = theme::scaled (buttonGapPx, s);
-        const auto placeIcon = [&] (juce::Component& c, int size)
-        {
-            c.setBounds (r.removeFromLeft (size).withSizeKeepingCentre (size, size));
-            r.removeFromLeft (bg);
-        };
-        placeIcon (toStartButton, ib);
-        placeIcon (backButton, ib);
-        placeIcon (playButton, pb);
-        placeIcon (forwardButton, ib);
-        placeIcon (loopButton, ib);
-        r.removeFromLeft (theme::scaled (16.0f, s) - bg);
+        auto r = transportArea.withHeight (m.transportH);
+        timeBox = r.removeFromTop (px (timeScreenPx));
+        r.removeFromTop (px (rowGapPx));
 
-        const int timeH = theme::scaled (12.0f + 2.0f, s)
-                          + juce::roundToInt (theme::monoFont (theme::em (1.55f, s), true).getHeight()
-                                              + 2.0f * theme::monoFont (theme::em (0.66f, s)).getHeight());
-        timeBox = r.withSizeKeepingCentre (r.getWidth(), timeH);
+        auto keys = r.removeFromTop (px (keyHPx));
+        const int kw = px (keyWPx), pw = px (playWPx), kg = px (keyGapPx);
+        const auto place = [&] (IconButton& b, int w)
+        {
+            b.setFaceBounds (keys.removeFromLeft (w));
+            keys.removeFromLeft (kg);
+        };
+        place (toStartButton, kw);
+        place (backButton, kw);
+        place (playButton, pw);
+        place (forwardButton, kw);
+        place (loopButton, kw);
     }
 
-    // 2. Crossfade
+    // 2. Crossfade: labels, fader, pads
     {
-        auto r = crossfadeArea.withSizeKeepingCentre (crossfadeArea.getWidth(), m.xfH);
-        xfLabelRow = r.removeFromTop (juce::roundToInt (theme::uiFont (theme::em (0.72f, s), true).getHeight()));
-        r.removeFromTop (theme::scaled (6.0f, s));
-        crossfadeSlider.setBounds (r.removeFromTop (theme::scaled (40.0f, s)));
-        r.removeFromTop (theme::scaled (6.0f, s));
+        auto r = crossfadeArea.withHeight (m.xfH);
+        xfLabelRow = r.removeFromTop (px (silkRowPx));
+        r.removeFromTop (px (rowGapPx));
 
-        auto row = r.removeFromTop (theme::scaled (30.0f, s));
-        const auto fit = [&] (juce::TextButton& b)
+        // The slot spans the column; the travel (and the ticks) is inset by half the cap (the thumb radius).
+        crossfadeSlider.setBounds (r.removeFromTop (px (faderPx)));
+        r.removeFromTop (px (rowGapPx));
+
+        auto row = r.removeFromTop (px (padRowPx));
+        const auto fit = [&] (HwButton& b)
         {
-            const auto f = theme::uiFont ((float) row.getHeight() * 0.35f);
-            const int w = (int) std::ceil (juce::GlyphArrangement::getStringWidth (f, b.getButtonText())) + theme::scaled (20.0f, s);
-            b.setBounds (row.removeFromLeft (w));
-            row.removeFromLeft (theme::scaled (8.0f, s));
+            const auto f = theme::uiFont (11.0f * s, theme::Weight::extraBold);
+            const int w = (int) std::ceil (juce::GlyphArrangement::getStringWidth (f, b.getButtonText())) + px (24.0f);
+            b.setFaceBounds (row.removeFromLeft (w));
+            row.removeFromLeft (px (8.0f));
         };
         fit (residualButton);
         fit (curveButton);
         fit (centreButton);
-        hintArea = row;
     }
 
-    // 3. Master
+    // 3. Master: the knob column and the clip column, right-aligned and vertically centred
     {
-        masterBox = masterArea.withSizeKeepingCentre (masterArea.getWidth(), m.masterH);
-        auto r = masterBox.reduced (theme::scaled (14.0f, s), theme::scaled (10.0f, s));
+        auto r = masterArea.withSizeKeepingCentre (masterArea.getWidth(), m.masterH);
+        const int labelH = px (silkRowPx), gap = px (labelGapPx);
 
-        const int clip = theme::scaled (clipPx, s);
-        clipButton.setBounds (r.removeFromRight (clip).withSizeKeepingCentre (clip, clip));
-        r.removeFromRight (theme::scaled (14.0f, s));
+        auto clipCol = r.removeFromRight (juce::jmax (px (clipPx), (int) std::ceil (theme::silkWidth ("Clip", 10.0f * s))));
+        r.removeFromRight (px (18.0f));
+        const int knobBox = px (knobBoxPx);
+        auto knobCol = r.removeFromRight (knobBox);
 
-        masterLabelRow = r.removeFromTop (juce::roundToInt (theme::monoFont (theme::em (0.95f, s), true).getHeight()));
-        r.removeFromTop (theme::scaled (4.0f, s));
-        masterSlider.setBounds (r.removeFromTop (theme::scaled (32.0f, s)));
-        r.removeFromTop (theme::scaled (4.0f, s));
-        const int mh = juce::jmax (3, theme::scaled (5.0f, s));
-        outMeters[0].setBounds (r.removeFromTop (mh));
-        r.removeFromTop (theme::scaled (3.0f, s));
-        outMeters[1].setBounds (r.removeFromTop (mh));
+        masterSlider.setBounds (knobCol.removeFromTop (knobBox));
+        knobCol.removeFromTop (gap);
+        masterLabel = knobCol.removeFromTop (labelH).expanded (px (40.0f), 0);
+
+        // The clip pad's centre lines up with the knob's
+        const int clip = px (clipPx);
+        clipButton.setFaceBounds (juce::Rectangle<int> (clip, clip).withCentre ({ clipCol.getCentreX(), masterSlider.getBounds().getCentreY() }));
+        clipLabel = juce::Rectangle<int> (clipCol.getX() - px (10.0f), masterLabel.getY(), clipCol.getWidth() + px (20.0f), labelH);
     }
 }
 
 void ControlDeck::paint (juce::Graphics& g)
 {
-    using theme::colour;
     const auto s = uiScale;
 
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff181C22), 0.0f, 0.0f,
-                                             colour (theme::panelArgb), 0.0f, (float) getHeight(), false));
-    g.fillAll();
-    g.setColour (colour (theme::hairline2Argb));
-    g.fillRect (0, 0, getWidth(), 1);
+    // The panel: #2A2C31 with the inset top highlight
+    theme::drawPanel (g, getLocalBounds().toFloat(), s, C::panel, 0.0f, true);
 
-    // Time readout
+    // Time screen: 36 px time, "Sample ..." / "Total ..." stacked on the right
     {
         const auto box = timeBox.toFloat();
-        g.setColour (colour (theme::groundArgb));
-        g.fillRoundedRectangle (box, 6.0f * s);
-        g.setColour (colour (theme::hairlineArgb));
-        g.drawRoundedRectangle (box.reduced (0.5f), 6.0f * s, 1.0f);
+        theme::drawScreen (g, box, s);
+        auto inner = box.reduced (14.0f * s, 8.0f * s);
 
-        auto inner = box.reduced (12.0f * s, 6.0f * s);
-        const auto big = theme::monoFont (theme::em (1.55f, s), true);
-        const auto small = theme::monoFont (theme::em (0.66f, s));
-        g.setColour (colour (theme::textArgb));
+        const auto small = theme::monoFont (11.0f * s);
+        const auto lines = juce::StringArray::fromLines (sampleText);
+        float linesW = 0.0f;
+        for (const auto& line : lines)
+            linesW = juce::jmax (linesW, juce::GlyphArrangement::getStringWidth (small, line));
+
+        const auto big = theme::monoFont (36.0f * s, true);
+        const float timeW = juce::GlyphArrangement::getStringWidth (big, timeText);
+        auto right = inner.withLeft (juce::jmin (inner.getRight(), juce::jmax (inner.getX() + timeW + 12.0f * s, inner.getRight() - linesW)));
+
+        g.setColour (colour (C::screenText));
         g.setFont (big);
-        g.drawText (timeText, inner.removeFromTop (big.getHeight()), juce::Justification::centredLeft, false);
-        inner.removeFromTop (2.0f * s);
-        g.setColour (colour (theme::mutedTextArgb));
+        g.drawText (timeText, inner.withRight (right.getX()), juce::Justification::centredLeft, false);
+
+        g.setColour (colour (C::screenDim));
         g.setFont (small);
-        // Two stacked lines ("Sample: N" / "Total: N"), split on '\n'.
-        for (const auto& line : juce::StringArray::fromLines (sampleText))
-            g.drawText (line, inner.removeFromTop (small.getHeight()), juce::Justification::centredLeft, true);
+        const float lineH = 11.0f * 1.4f * s;
+        auto block = right.withTop (right.getBottom() - lineH * (float) lines.size() - 2.0f * s);
+        for (const auto& line : lines)
+            g.drawFittedText (line, block.removeFromTop (lineH).toNearestInt(), juce::Justification::centredRight, 1, 0.8f);
     }
 
-    // Crossfade labels and hint
+    // Crossfade labels: A · ORIGINAL ... CROSSFADE <readout> ... STEM SUM · B
     {
         const float alpha = crossfadeDimmed ? 0.45f : 1.0f;
-        const auto f = theme::uiFont (theme::em (0.72f, s), true);
+        const float px = 10.0f * s;
         const auto row = xfLabelRow.toFloat();
-        g.setColour (colour (theme::colourAArgb).withMultipliedAlpha (alpha));
-        theme::drawTrackedText (g, "A " + middleDot + " ORIGINAL", row, f, 0.1f, juce::Justification::centredLeft);
-        g.setColour (colour (theme::colourBArgb).withMultipliedAlpha (alpha));
-        theme::drawTrackedText (g, "STEM SUM " + middleDot + " B", row, f, 0.1f, juce::Justification::centredRight);
-        g.setColour (colour (theme::mutedTextArgb).withMultipliedAlpha (alpha));
-        g.setFont (theme::monoFont (theme::em (0.72f, s)));
-        g.drawText (xfReadout, row, juce::Justification::centred, false);
+        theme::drawSilk (g, "A " + middleDot + " original", row, px, colour (C::colourA).withMultipliedAlpha (alpha));
+        theme::drawSilk (g, "Stem sum " + middleDot + " B", row, px, colour (C::colourB).withMultipliedAlpha (alpha),
+                         juce::Justification::centredRight);
 
-        const auto hintFont = theme::uiFont (theme::em (0.7f, s));
-        const juce::String hint ("Click or drag in any waveform to move the playhead");
-        if (juce::GlyphArrangement::getStringWidth (hintFont, hint) <= (float) hintArea.getWidth())
-        {
-            g.setFont (hintFont);
-            g.drawText (hint, hintArea, juce::Justification::centredRight, false);
-        }
+        const auto mono = theme::monoFont (10.0f * s);
+        const float labelW = theme::silkWidth ("Crossfade", px);
+        const float readoutW = juce::GlyphArrangement::getStringWidth (mono, xfReadout);
+        const float gap = 8.0f * s;
+        auto centre = row.withSizeKeepingCentre (labelW + gap + readoutW + 2.0f, row.getHeight());
+        theme::drawSilk (g, "Crossfade", centre.removeFromLeft (labelW + 1.0f), px, colour (C::silk).withMultipliedAlpha (alpha));
+        centre.removeFromLeft (gap);
+        g.setColour (colour (C::muted).withMultipliedAlpha (alpha));
+        g.setFont (mono);
+        g.drawText (xfReadout, centre, juce::Justification::centredLeft, false);
     }
 
-    // Master box
+    // MASTER <gain>  and  CLIP
     {
-        const auto box = masterBox.toFloat();
-        g.setColour (colour (theme::groundArgb));
-        g.fillRoundedRectangle (box, 8.0f * s);
-        g.setColour (colour (theme::hairlineArgb));
-        g.drawRoundedRectangle (box.reduced (0.5f), 8.0f * s, 1.0f);
+        const float px = 10.0f * s;
+        const auto mono = theme::monoFont (10.0f * s);
+        const float labelW = theme::silkWidth ("Master", px);
+        const float valueW = juce::GlyphArrangement::getStringWidth (mono, gainText);
+        const float gap = 6.0f * s;
+        auto row = masterLabel.toFloat().withSizeKeepingCentre (labelW + gap + valueW + 2.0f, (float) masterLabel.getHeight());
+        theme::drawSilk (g, "Master", row.removeFromLeft (labelW + 1.0f), px, colour (C::silk));
+        row.removeFromLeft (gap);
+        g.setColour (colour (C::text));
+        g.setFont (mono);
+        g.drawText (gainText, row, juce::Justification::centredLeft, false);
 
-        const auto row = masterLabelRow.toFloat();
-        g.setColour (colour (theme::mutedTextArgb));
-        theme::drawTrackedText (g, "MASTER", row, theme::uiFont (theme::em (0.68f, s)), 0.12f, juce::Justification::centredLeft);
-        g.setColour (colour (theme::amberArgb));
-        g.setFont (theme::monoFont (theme::em (0.95f, s), true));
-        g.drawText (gainText, row, juce::Justification::centredRight, false);
+        theme::drawSilk (g, "Clip", clipLabel.toFloat(), px, colour (C::silk), juce::Justification::centred);
     }
 }
 

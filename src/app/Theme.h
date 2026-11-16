@@ -9,49 +9,72 @@ namespace stemab::theme
 {
 
 //==============================================================================
-// Palette (the approved "VST plugin" mockup, design/project/Main.dc.html)
-inline constexpr juce::uint32 groundArgb     = 0xff0B0D10;   // window ground, wells, meter backgrounds
-inline constexpr juce::uint32 panelArgb      = 0xff13161B;   // header bar, track headers, meter bridge
-inline constexpr juce::uint32 trackBgArgb    = 0xff0E1115;   // behind the track area
-inline constexpr juce::uint32 laneArgb       = 0xff111419;   // waveform lanes
-inline constexpr juce::uint32 groupRowArgb   = 0xff10141A;   // the "B - Stem Sum" group row
-inline constexpr juce::uint32 residualLaneArgb = 0xff12131A;
-inline constexpr juce::uint32 raisedArgb     = 0xff1A1E24;   // buttons and other raised controls
-inline constexpr juce::uint32 hairlineArgb   = 0xff232830;
-inline constexpr juce::uint32 hairline2Argb  = 0xff2C323B;   // button borders, ruler ticks
-inline constexpr juce::uint32 hoverBorderArgb = 0xff3C4450;
-inline constexpr juce::uint32 capBorderArgb  = 0xff5A6270;
-inline constexpr juce::uint32 textArgb       = 0xffE6E8EB;
-inline constexpr juce::uint32 buttonTextArgb = 0xffC9CED6;
-inline constexpr juce::uint32 mutedTextArgb  = 0xff8B93A1;
-inline constexpr juce::uint32 toggleOnArgb   = 0xff2A3340;   // neutral "on" (Equal-power)
+// Palette (the approved "hardware panel" mockup, looks/project/Hardware.dc.html, and its colour-blind safe
+// variant HardwareCvd.dc.html). Every colour is looked up by role through the active palette, so switching
+// palettes at runtime is setPalette() + a repaint (plus re-rendering the cached waveform images).
 
-inline constexpr juce::uint32 colourAArgb    = 0xffECE6D6;   // A = ivory
-inline constexpr juce::uint32 colourBArgb    = 0xff3BB8F2;   // B = blue accent
-inline constexpr juce::uint32 residualArgb   = 0xffF2708C;   // R = pink
-inline constexpr juce::uint32 amberArgb      = 0xffF2C14E;   // master / gain / mute / playing
-inline constexpr juce::uint32 meterLowArgb   = 0xff2F8F63;
-inline constexpr juce::uint32 meterMidArgb   = 0xff4CC38A;
-inline constexpr juce::uint32 meterHighArgb  = 0xffF2C14E;
-inline constexpr juce::uint32 meterClipArgb  = 0xffFF5A5A;
-inline constexpr juce::uint32 clipOnArgb     = 0xffFF5A5A;
-inline constexpr juce::uint32 clipOffArgb    = 0xff3A1E22;
-inline constexpr juce::uint32 goodArgb       = 0xff4CC38A;   // status dot: aligned
+enum class PaletteId { standard = 0, colourBlindSafe = 1 };
 
+/** Colour roles. The panel greys are the same in both palettes; the signal colours (below `colourA`) change. */
+enum class C
+{
+    ground,         // #222428 window ground between the panels
+    panel,          // #2A2C31 top / bottom panels, channel strips
+    panelHi,        // #3A3D42 inset top highlight of panels and strips
+    panelEdge,      // #17181B dark panel edge
+    residualStrip,  // #26282C the Residual strip
+    key,            // #3A3D42 key face
+    keyHi,          // #5A5E64 key inset top highlight
+    keyShadow,      // #151618 key bottom shadow
+    padOff,         // #2F3236 unlit pad
+    padShadow,      // #121315 pad bottom shadow
+    screen,         // #04080D sunken screens
+    screenLine,     // #16263A lane separators, ruler border
+    screenText,     // #CFE3F5 text on screens
+    screenDim,      // #5D7A94 dim text on screens (ruler, scale)
+    ledOff,         // #0D1620 unlit LED cell
+    slot,           // #121315 fader slot, knob arc track
+    tick,           // #4A4E54 fader ticks
+    knobHi,         // #4A4E54 knob gradient centre
+    knobLo,         // #26282C knob gradient edge
+    knobRim,        // #6A6E74 knob inset highlight
+    capHi,          // #55595F fader cap gradient top
+    capLo,          // #33363B fader cap gradient bottom
+    capRim,         // #777B81 fader cap inset highlight
+    text,           // #E7E8EA
+    silk,           // #B9BCC0 silkscreen labels
+    silkDim,        // #7E8288 dim silkscreen labels
+    muted,          // #8C9096 muted text, unlit pad text
+    inkDark,        // #0B1622 text on light pads and the playhead tag
+    inkPad,         // #1A1B1E text on amber pads
+
+    // Signal colours (palette-dependent)
+    colourA,        // A = ivory
+    colourB,        // B (and Solo, Vocals)
+    accent,         // wordmark, Residual, Master arc
+    go,             // Play, meter low cells, "aligned" dot
+    amber,          // Mute, Equal power, meter mid cells, notes
+    meterRed,       // meter top cells, Clip, errors
+    nullDepth,      // the live Null Depth value
+    stemDrums,
+    stemBass,
+    stemOther,
+    stemVocals,
+
+    count
+};
+
+void setPalette (PaletteId);
+PaletteId activePalette() noexcept;
+
+juce::Colour colour (C) noexcept;
 /** Drums, Bass, Other, Vocals. */
-inline constexpr std::array<juce::uint32, 4> stemArgb { 0xffFF7A45, 0xffA08BFF, 0xff4CC38A, 0xff3BB8F2 };
-
-// Older names, kept for code that still refers to them.
-inline constexpr juce::uint32 windowArgb  = groundArgb;
-inline constexpr juce::uint32 accentArgb  = colourBArgb;
-inline constexpr juce::uint32 dimTextArgb = mutedTextArgb;
-inline constexpr juce::uint32 outlineArgb = hairline2Argb;
-
-inline juce::Colour colour (juce::uint32 argb) noexcept     { return juce::Colour (argb); }
+juce::Colour stemColour (int index) noexcept;
+inline C stemRole (int index) noexcept       { return (C) ((int) C::stemDrums + juce::jlimit (0, 3, index)); }
 
 //==============================================================================
-// Metrics: the mockup is specified at 100 % with a 14 px base font. Every metric and font size is multiplied
-// by one interface scale (MainComponent::uiScale: 0.9 / 1.0 / 1.15 / 1.3).
+// Metrics: the mockup is specified at 100 %. Every metric and font size is multiplied by one interface scale
+// (MainComponent::uiScale: 0.9 / 1.0 / 1.15 / 1.3).
 inline constexpr float baseFontPx = 14.0f;
 
 /** The interface-scale steps: the one list behind A- / A+, Ctrl+- / Ctrl+= / Ctrl+0 and Preferences. */
@@ -62,57 +85,30 @@ inline int scaled (float px, float uiScale) noexcept         { return juce::roun
 inline float em (float ems, float uiScale) noexcept          { return baseFontPx * ems * uiScale; }
 
 //==============================================================================
-// Fonts
-inline juce::String pickUiFontName()
-{
-    // The variable font's installed family names are "Segoe UI Variable Display/Text/Small".
-    const auto installed = juce::Font::findAllTypefaceNames();
-
-    for (const char* candidate : { "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI Variable Display" })
-        if (installed.contains (candidate))
-            return candidate;
-
-    return "Segoe UI";
-}
-
-inline juce::String pickMonoFontName()
-{
-    const auto installed = juce::Font::findAllTypefaceNames();
-
-    for (const char* candidate : { "Cascadia Mono", "Cascadia Code", "Consolas" })
-        if (installed.contains (candidate))
-            return candidate;
-
-    return juce::Font::getDefaultMonospacedFontName();
-}
-
-inline const juce::String& uiFontName()
-{
-    static const juce::String name = pickUiFontName();
-    return name;
-}
-
-inline const juce::String& monoFontName()
-{
-    static const juce::String name = pickMonoFontName();
-    return name;
-}
+// Fonts: Archivo (text), Archivo Narrow Bold (silkscreen labels) and JetBrains Mono (numbers, screens), bundled
+// as binary data (SIL OFL, resources/fonts). Falls back to Segoe UI / Cascadia Mono if they cannot be loaded.
+enum class Weight { regular, semiBold, bold, extraBold };
 
 /** Text font, `px` = CSS-like em size in component pixels. */
-inline juce::Font uiFont (float px, bool bold = false)
-{
-    return juce::Font (juce::FontOptions (uiFontName(), 12.0f, bold ? juce::Font::bold : juce::Font::plain)
-                           .withPointHeight (juce::jmax (1.0f, px)));
-}
+juce::Font uiFont (float px, Weight);
+inline juce::Font uiFont (float px, bool bold = false)       { return uiFont (px, bold ? Weight::bold : Weight::regular); }
 
-/** Numbers and times. */
-inline juce::Font monoFont (float px, bool bold = false)
-{
-    return juce::Font (juce::FontOptions (monoFontName(), 12.0f, bold ? juce::Font::bold : juce::Font::plain)
-                           .withPointHeight (juce::jmax (1.0f, px)));
-}
+/** Numbers, times, file names. `semiBold`: weight 600. */
+juce::Font monoFont (float px, bool semiBold = false);
 
-/** Text with letter spacing (the mockup's small-caps section labels use 0.1 - 0.12 em tracking). */
+/** The silkscreen label font (Archivo Narrow 700); draw with drawSilk() for the tracking and capitals. */
+juce::Font silkFont (float px);
+
+/** True when the bundled fonts loaded (false: the Segoe UI / Cascadia Mono fallback is in use). */
+bool bundledFontsLoaded();
+
+/** Archivo Regular (or null): the LookAndFeel's default sans-serif typeface. */
+juce::Typeface::Ptr defaultSansTypeface();
+
+/** Drops the bundled typefaces (application shutdown, after the windows and the LookAndFeel are gone). */
+void releaseFonts();
+
+/** Text with letter spacing. */
 inline void drawTrackedText (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area,
                              const juce::Font& font, float trackingEms, juce::Justification just)
 {
@@ -120,9 +116,23 @@ inline void drawTrackedText (juce::Graphics& g, const juce::String& text, juce::
     g.drawText (text, area, just, true);
 }
 
+/** A silkscreen label: Archivo Narrow 700, capitals, 0.08 em tracking. `px` is already scaled. */
+inline void drawSilk (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area, float px,
+                      juce::Colour c, juce::Justification just = juce::Justification::centredLeft)
+{
+    g.setColour (c);
+    drawTrackedText (g, text.toUpperCase(), area, silkFont (px), 0.08f, just);
+}
+
+inline float silkWidth (const juce::String& text, float px)
+{
+    return juce::GlyphArrangement::getStringWidth (silkFont (px).withExtraKerningFactor (0.08f), text.toUpperCase());
+}
+
 //==============================================================================
-// Levels: meters map -60..0 dBFS linearly; above 0 dBFS is clipping.
+// Levels: meters map -60..0 dBFS; above 0 dBFS is clipping. The LED meters use 1.5 dB cells.
 inline constexpr float meterFloorDb = -60.0f;
+inline constexpr int ledCells = 40;                   // 40 x 1.5 dB
 
 inline float gainToDb (float linear) noexcept
 {
@@ -135,13 +145,10 @@ inline float meterProportion (float linear) noexcept
     return juce::jlimit (0.0f, 1.0f, (gainToDb (linear) - meterFloorDb) / -meterFloorDb);
 }
 
-/** The meter gradient (green -> amber -> red) running from `floorPoint` (-60 dB) to `topPoint` (0 dB). */
-inline juce::ColourGradient meterGradient (juce::Point<float> floorPoint, juce::Point<float> topPoint)
+/** The LED colour of a cell whose lower edge is `cellLowDb`: green, amber from -12 dB, red from -3 dB. */
+inline juce::Colour ledColour (float cellLowDb) noexcept
 {
-    juce::ColourGradient grad (colour (meterLowArgb), floorPoint, colour (meterClipArgb), topPoint, false);
-    grad.addColour (0.66, colour (meterMidArgb));
-    grad.addColour (0.84, colour (meterHighArgb));
-    return grad;
+    return colour (cellLowDb >= -3.0f ? C::meterRed : cellLowDb >= -12.0f ? C::amber : C::go);
 }
 
 /** "-12.3" style dB text with a real minus sign; "-inf" below the floor. */
@@ -157,240 +164,66 @@ inline juce::String dbText (float linear, int decimals = 1)
 }
 
 //==============================================================================
-// Drawing helpers
+// Drawing helpers (the hardware panel language). `s` is the interface scale.
 
-/** The plugin-style fader cap: dark vertical gradient with a bright centre stripe, 1 px border, drop shadow. */
-inline void drawFaderCap (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour stripe, float corner)
-{
-    juce::Path shape;
-    shape.addRoundedRectangle (r, corner);
-    juce::DropShadow (juce::Colours::black.withAlpha (0.6f), juce::roundToInt (r.getHeight() * 0.2f),
-                      { 0, juce::roundToInt (r.getHeight() * 0.08f) }).drawForPath (g, shape);
+/** A raised panel area (#2A2C31) with the inset top highlight. */
+void drawPanel (juce::Graphics&, juce::Rectangle<float>, float s, C fill = C::panel, float radius = 0.0f, bool topHighlight = true);
 
-    juce::ColourGradient grad (juce::Colour (0xff4A515C), r.getX(), r.getY(),
-                               juce::Colour (0xff1C2026), r.getX(), r.getBottom(), false);
-    grad.addColour (0.48, juce::Colour (0xff262B33));
-    g.setGradientFill (grad);
-    g.fillPath (shape);
+/** A sunken screen: #04080D, radius 6, inset shadow, faint bottom highlight. */
+void drawScreen (juce::Graphics&, juce::Rectangle<float>, float s, float radius = 6.0f);
 
-    const float stripeH = juce::jmax (1.0f, r.getHeight() * 0.03f);
-    g.setColour (stripe);
-    g.fillRect (r.getX() + 1.0f, r.getCentreY() - stripeH * 0.5f, r.getWidth() - 2.0f, stripeH);
+/** A key face (#3A3D42, radius 4, 2 px bottom shadow drawn below `face`, inset top highlight). */
+void drawKey (juce::Graphics&, juce::Rectangle<float> face, float s, bool highlighted, bool down, bool enabled,
+              float radius = 4.0f);
 
-    g.setColour (colour (capBorderArgb));
-    g.strokePath (shape, juce::PathStrokeType (1.0f));
-}
+/** An RGB pad (radius 5): `lit` in `litColour` with a glow of `glowPx` (already scaled), else #2F3236. */
+void drawPad (juce::Graphics&, juce::Rectangle<float> face, float s, bool lit, juce::Colour litColour,
+              bool highlighted, bool down, bool enabled, float glowPx, float radius = 5.0f);
+
+/** One LED meter cell. `alongX`: the meter runs horizontally (the cell's gradient then runs vertically). */
+void drawLedCell (juce::Graphics&, juce::Rectangle<float> cell, bool lit, juce::Colour, bool alongX);
 
 //==============================================================================
-/** Dark LookAndFeel_V4 in the mockup palette, Segoe UI Variable text.
+/** The hardware-panel LookAndFeel. Keys, pads and the transport are drawn by the widgets themselves
+    (ui/Widgets.h); this styles the plain JUCE widgets that remain (Preferences, the audio device selector,
+    tooltips, scrollbars) and the two sliders:
 
-    Per-component styling through properties (so the widgets stay plain JUCE ones):
-      - TextButton "fontRatio" (double): font size as a fraction of the button height (default 0.37);
-        "bold" (bool).
-      - Slider "style": "crossfade" (gradient track, tall cap) or "fader" (dark track, amber cap);
-        "thumbW" / "thumbH" (int): the cap size, already scaled. */
+      - Slider property "style": "crossfade" (dark slot, ticks, chunky cap) or "knob" (the Master knob:
+        radial knob, red value arc, white pointer); "thumbW" / "thumbH" (int): the crossfade cap size, scaled;
+        "uiScale" (double) for the knob.
+      - ToggleButton property "fontPx" (double): the text size, already scaled.
+
+    applyPalette() re-reads the active palette into the JUCE colour ids. */
 class StemLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
-    StemLookAndFeel()
-    {
-        using Scheme = juce::LookAndFeel_V4::ColourScheme;
+    StemLookAndFeel();
 
-        auto scheme = getDarkColourScheme();
-        scheme.setUIColour (Scheme::windowBackground, colour (groundArgb));
-        scheme.setUIColour (Scheme::widgetBackground, colour (raisedArgb));
-        scheme.setUIColour (Scheme::menuBackground,   colour (panelArgb));
-        scheme.setUIColour (Scheme::outline,          colour (hairline2Argb));
-        scheme.setUIColour (Scheme::defaultText,      colour (textArgb));
-        scheme.setUIColour (Scheme::defaultFill,      colour (colourBArgb));
-        scheme.setUIColour (Scheme::highlightedText,  colour (groundArgb));   // dark text on accent
-        scheme.setUIColour (Scheme::highlightedFill,  colour (colourBArgb));
-        scheme.setUIColour (Scheme::menuText,         colour (textArgb));
-        setColourScheme (scheme);
+    void applyPalette();
 
-        setColour (juce::ResizableWindow::backgroundColourId, colour (groundArgb));
-        setColour (juce::Label::textColourId,                 colour (textArgb));
-        setColour (juce::ScrollBar::thumbColourId,            colour (hairline2Argb).brighter (0.3f));
-        setColour (juce::TextButton::buttonColourId,          colour (raisedArgb));
-        setColour (juce::TextButton::buttonOnColourId,        colour (colourBArgb));
-        setColour (juce::TextButton::textColourOffId,         colour (buttonTextArgb));
-        setColour (juce::TextButton::textColourOnId,          colour (groundArgb));
-        setColour (juce::TooltipWindow::backgroundColourId,   colour (panelArgb));
-        setColour (juce::TooltipWindow::textColourId,         colour (textArgb));
-        setColour (juce::TooltipWindow::outlineColourId,      colour (hairline2Argb));
+    juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
+    void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool highlighted, bool down) override;
+    void drawButtonText (juce::Graphics&, juce::TextButton&, bool highlighted, bool down) override;
+    void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
 
-        setDefaultSansSerifTypefaceName (uiFontName());
-    }
+    int getSliderThumbRadius (juce::Slider&) override;
+    void drawLinearSlider (juce::Graphics&, int x, int y, int width, int height, float sliderPos, float minPos,
+                           float maxPos, juce::Slider::SliderStyle, juce::Slider&) override;
+    void drawRotarySlider (juce::Graphics&, int x, int y, int width, int height, float sliderPosProportional,
+                           float rotaryStartAngle, float rotaryEndAngle, juce::Slider&) override;
 
-    static juce::String pickUiFontName()    { return theme::pickUiFontName(); }
+    void drawComboBox (juce::Graphics&, int width, int height, bool isButtonDown, int buttonX, int buttonY,
+                       int buttonW, int buttonH, juce::ComboBox&) override;
 
-    juce::Font getTextButtonFont (juce::TextButton& b, int buttonHeight) override
-    {
-        const auto ratio = (float) (double) b.getProperties().getWithDefault ("fontRatio", 0.37);
-        const bool bold = (bool) b.getProperties().getWithDefault ("bold", false);
-        return uiFont ((float) buttonHeight * ratio, bold);
-    }
-
-    void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour& background,
-                               bool highlighted, bool down) override
-    {
-        auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-        const float corner = juce::jmin (6.0f, r.getHeight() * 0.2f);
-        const bool on = b.getToggleState();
-
-        auto fill = on ? b.findColour (juce::TextButton::buttonOnColourId) : background;
-        if (down)
-            fill = fill.brighter (0.08f);
-
-        g.setColour (fill.withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f));
-        g.fillRoundedRectangle (r, corner);
-
-        auto border = on ? fill : colour (highlighted ? hoverBorderArgb : hairline2Argb);
-        g.setColour (border.withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f));
-        g.drawRoundedRectangle (r, corner, 1.0f);
-    }
-
-    void drawButtonText (juce::Graphics& g, juce::TextButton& b, bool highlighted, bool) override
-    {
-        g.setFont (getTextButtonFont (b, b.getHeight()));
-        auto c = b.findColour (b.getToggleState() ? juce::TextButton::textColourOnId : juce::TextButton::textColourOffId);
-        if (highlighted && ! b.getToggleState())
-            c = c.brighter (0.4f);
-        g.setColour (c.withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f));
-        g.drawFittedText (b.getButtonText(), b.getLocalBounds().reduced (4, 0), juce::Justification::centred, 1, 1.0f);
-    }
-
-    /** Check boxes (Preferences): a rounded box, blue with a dark tick when on. Property "fontPx" (double,
-        default 14) sets the text size, already scaled. */
-    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& b, bool highlighted, bool) override
-    {
-        const auto fontPx = (float) (double) b.getProperties().getWithDefault ("fontPx", 14.0);
-        const float alpha = b.isEnabled() ? 1.0f : 0.5f;
-        const float box = std::round (fontPx * 1.15f);
-        const auto r = b.getLocalBounds().toFloat();
-        const juce::Rectangle<float> tick (r.getX() + 1.0f, r.getCentreY() - box * 0.5f, box, box);
-        const bool on = b.getToggleState();
-        const float corner = juce::jmax (2.0f, box * 0.2f);
-
-        g.setColour (colour (on ? colourBArgb : raisedArgb).withMultipliedAlpha (alpha));
-        g.fillRoundedRectangle (tick, corner);
-        g.setColour (colour (on ? colourBArgb : (highlighted ? hoverBorderArgb : hairline2Argb)).withMultipliedAlpha (alpha));
-        g.drawRoundedRectangle (tick.reduced (0.5f), corner, 1.0f);
-
-        if (on)
-        {
-            juce::Path p;
-            p.startNewSubPath (tick.getX() + box * 0.24f, tick.getY() + box * 0.52f);
-            p.lineTo (tick.getX() + box * 0.43f, tick.getY() + box * 0.71f);
-            p.lineTo (tick.getX() + box * 0.77f, tick.getY() + box * 0.31f);
-            g.setColour (colour (groundArgb).withMultipliedAlpha (alpha));
-            g.strokePath (p, juce::PathStrokeType (juce::jmax (1.5f, box * 0.13f), juce::PathStrokeType::curved,
-                                                   juce::PathStrokeType::rounded));
-        }
-
-        g.setColour (colour (highlighted ? textArgb : buttonTextArgb).withMultipliedAlpha (alpha));
-        g.setFont (uiFont (fontPx));
-        g.drawFittedText (b.getButtonText(), r.withTrimmedLeft (box + fontPx * 0.6f).toNearestInt(),
-                          juce::Justification::centredLeft, 2, 1.0f);
-    }
-
-    int getSliderThumbRadius (juce::Slider& s) override
-    {
-        if (s.getProperties().contains ("thumbW"))
-            return juce::jmax (1, (int) s.getProperties()["thumbW"] / 2);
-        return juce::LookAndFeel_V4::getSliderThumbRadius (s);
-    }
-
-    void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height,
-                           float sliderPos, float minPos, float maxPos,
-                           juce::Slider::SliderStyle style, juce::Slider& s) override
-    {
-        const auto kind = s.getProperties()["style"].toString();
-        if (kind != "crossfade" && kind != "fader")
-        {
-            juce::LookAndFeel_V4::drawLinearSlider (g, x, y, width, height, sliderPos, minPos, maxPos, style, s);
-            return;
-        }
-
-        const bool crossfade = kind == "crossfade";
-        const float thumbW = (float) (int) s.getProperties().getWithDefault ("thumbW", 16);
-        const float thumbH = (float) (int) s.getProperties().getWithDefault ("thumbH", 28);
-        const float cy = (float) y + (float) height * 0.5f;
-        const float trackH = juce::jmax (3.0f, thumbH * 0.21f);   // 8 px under a 38 px cap, 6 px under 28 px
-
-        // Track spans the full slider bounds plus the thumb indent on each side.
-        auto track = juce::Rectangle<float> ((float) x - thumbW * 0.5f, cy - trackH * 0.5f,
-                                             (float) width + thumbW, trackH);
-
-        if (crossfade)
-        {
-            juce::ColourGradient grad (colour (colourAArgb), track.getX(), cy, colour (colourBArgb), track.getRight(), cy, false);
-            grad.addColour (0.5, juce::Colour (0xff3A3F48));
-            g.setGradientFill (grad);
-        }
-        else
-        {
-            g.setColour (colour (groundArgb));
-        }
-        g.fillRoundedRectangle (track, trackH * 0.5f);
-        g.setColour (juce::Colours::black.withAlpha (0.5f));
-        g.drawRoundedRectangle (track, trackH * 0.5f, 1.0f);
-
-        if (crossfade)
-        {
-            // Centre (A 50 / B 50) tick
-            g.setColour (colour (mutedTextArgb).withAlpha (0.6f));
-            g.fillRect (juce::Rectangle<float> (track.getCentreX() - 0.5f, track.getBottom() + 3.0f, 1.0f, trackH));
-        }
-
-        const auto cap = juce::Rectangle<float> (thumbW, thumbH).withCentre ({ sliderPos, cy });
-        drawFaderCap (g, cap, crossfade ? colour (textArgb) : colour (amberArgb), crossfade ? 5.0f : 4.0f);
-    }
-
-    //==============================================================================
     // Tooltips: the UI font at the interface scale (JUCE's default is a fixed 13 px), left-aligned lines.
+    // The same scale sizes the keys this LookAndFeel draws (Preferences, the device selector).
     void setTooltipScale (float s) noexcept     { tooltipScale = s; }
-
     juce::Rectangle<int> getTooltipBounds (const juce::String& tipText, juce::Point<int> screenPos,
-                                           juce::Rectangle<int> parentArea) override
-    {
-        const auto layout = layoutTooltip (tipText);
-        float textW = 0.0f;
-        for (int i = 0; i < layout.getNumLines(); ++i)
-            textW = juce::jmax (textW, layout.getLine (i).getLineBoundsX().getLength());
-
-        const int padX = scaled (10.0f, tooltipScale), padY = scaled (6.0f, tooltipScale);
-        const int w = (int) std::ceil (textW) + 2 * padX;
-        const int h = (int) std::ceil (layout.getHeight()) + 2 * padY;
-
-        return juce::Rectangle<int> (screenPos.x > parentArea.getCentreX() ? screenPos.x - (w + 12) : screenPos.x + 24,
-                                     screenPos.y > parentArea.getCentreY() ? screenPos.y - (h + 6) : screenPos.y + 6,
-                                     w, h)
-            .constrainedWithin (parentArea);
-    }
-
-    void drawTooltip (juce::Graphics& g, const juce::String& text, int width, int height) override
-    {
-        const auto bounds = juce::Rectangle<int> (width, height).toFloat();
-        g.setColour (findColour (juce::TooltipWindow::backgroundColourId));
-        g.fillRect (bounds);
-        g.setColour (findColour (juce::TooltipWindow::outlineColourId));
-        g.drawRect (bounds, 1.0f);
-
-        layoutTooltip (text).draw (g, bounds.reduced ((float) scaled (10.0f, tooltipScale), (float) scaled (6.0f, tooltipScale)));
-    }
+                                           juce::Rectangle<int> parentArea) override;
+    void drawTooltip (juce::Graphics&, const juce::String& text, int width, int height) override;
 
 private:
-    juce::TextLayout layoutTooltip (const juce::String& text) const
-    {
-        juce::AttributedString s;
-        s.setJustification (juce::Justification::topLeft);
-        s.append (text, uiFont (em (1.0f, tooltipScale)), findColour (juce::TooltipWindow::textColourId));
-
-        juce::TextLayout layout;
-        layout.createLayout (s, 640.0f * tooltipScale);
-        return layout;
-    }
+    juce::TextLayout layoutTooltip (const juce::String& text) const;
 
     float tooltipScale = 1.0f;
 };

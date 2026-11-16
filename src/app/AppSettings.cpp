@@ -14,9 +14,16 @@ AppSettings::AppSettings()
     properties.setStorageParameters (options);
 }
 
+AppSettings::AppSettings (const juce::File& file)
+{
+    juce::PropertiesFile::Options options;
+    options.millisecondsBeforeSaving = -1;      // only save() and the destructor write
+    fileOverride = std::make_unique<juce::PropertiesFile> (file, options);
+}
+
 juce::PropertiesFile* AppSettings::props() const
 {
-    return properties.getUserSettings();
+    return fileOverride != nullptr ? fileOverride.get() : properties.getUserSettings();
 }
 
 juce::File AppSettings::getFile() const
@@ -161,6 +168,19 @@ void AppSettings::setWindowState (const juce::String& state)
 {
     if (auto* p = props())
         p->setValue (Keys::windowState, state);
+}
+
+//==============================================================================
+AppSettings::Palette AppSettings::getColourPalette() const
+{
+    auto* p = props();
+    return p != nullptr && p->getValue (Keys::colourPalette) == "colourBlindSafe" ? Palette::colourBlindSafe : Palette::standard;
+}
+
+void AppSettings::setColourPalette (Palette palette)
+{
+    if (auto* p = props())
+        p->setValue (Keys::colourPalette, palette == Palette::colourBlindSafe ? "colourBlindSafe" : "standard");
 }
 
 } // namespace stemab

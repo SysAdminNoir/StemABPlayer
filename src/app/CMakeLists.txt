@@ -17,6 +17,7 @@ target_sources(StemAB_App PRIVATE
     SessionLoader.h
     SessionState.cpp
     SessionState.h
+    Theme.cpp
     Theme.h
     WaveformBuilder.cpp
     WaveformBuilder.h
@@ -43,6 +44,20 @@ target_sources(StemAB_App PRIVATE
     ui/WaveformLane.h
     ui/Widgets.cpp
     ui/Widgets.h)
+
+# The bundled fonts (SIL OFL, resources/fonts): Archivo, Archivo Narrow Bold, JetBrains Mono. Theme.cpp loads
+# them with juce::Typeface::createSystemTypefaceFor.
+juce_add_binary_data(StemAB_Fonts
+    HEADER_NAME "StemABFonts.h"
+    NAMESPACE   StemABFonts
+    SOURCES
+        ${PROJECT_SOURCE_DIR}/resources/fonts/Archivo-Regular.ttf
+        ${PROJECT_SOURCE_DIR}/resources/fonts/Archivo-SemiBold.ttf
+        ${PROJECT_SOURCE_DIR}/resources/fonts/Archivo-Bold.ttf
+        ${PROJECT_SOURCE_DIR}/resources/fonts/Archivo-ExtraBold.ttf
+        ${PROJECT_SOURCE_DIR}/resources/fonts/ArchivoNarrow-Bold.ttf
+        ${PROJECT_SOURCE_DIR}/resources/fonts/JetBrainsMono-Regular.ttf
+        ${PROJECT_SOURCE_DIR}/resources/fonts/JetBrainsMono-SemiBold.ttf)
 
 # STEMAB_SOURCE_DIR: the file choosers open in the repo's "Audio Files/" and "Stem Files/" when present.
 target_compile_definitions(StemAB_App PRIVATE
@@ -73,6 +88,7 @@ target_link_libraries(StemAB_App
         StemAB_Decode
         StemAB_Load
         StemAB_JuceModules
+        StemAB_Fonts
         juce::juce_gui_extra
         juce::juce_audio_utils
         juce::juce_audio_devices

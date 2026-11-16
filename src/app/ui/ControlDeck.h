@@ -2,23 +2,21 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-#include <array>
-
-#include "app/ui/LevelMeter.h"
 #include "app/ui/Widgets.h"
 
 namespace stemab
 {
 
-/** The bottom control deck, three groups:
+/** The bottom control panel, three columns:
 
-      1. Transport - go to start, back 5 s, Play/Pause, forward 5 s, Loop; time (m:ss.mmm) + sample readout.
-      2. Crossfade - "A - ORIGINAL ... A 50 - B 50 ... STEM SUM - B" labels, the crossfade fader, then
-         R - Residual, Equal-power and Centre (the group dims while Residual is on).
-      3. Master - Master Gain fader with its readout, the stereo Out meter and the CLIP LED.
+      1. Transport - the time screen (m:ss.mmm, with "Sample ..." / "Total ..." stacked on the right), then the
+         keys To start, Back 5 s, Play/Pause (a green pad), Forward 5 s, Loop (lit while looping).
+      2. Crossfade - "A · ORIGINAL ... CROSSFADE A 50 · B 50 ... STEM SUM · B", the hardware fader, then the
+         pads R Residual, Equal power and Centre (the group dims while Residual is on).
+      3. Master - the Master Gain knob (red arc, "MASTER 0.0 dB" under it) and the CLIP pad.
 
     The widgets are public plain JUCE widgets: MainComponent wires them to the engine. When the crossfade
-    group would get too narrow, it moves to its own row above the other two. */
+    column would get too narrow, it moves to its own row above the other two. */
 class ControlDeck final : public juce::Component
 {
 public:
@@ -31,11 +29,10 @@ public:
                loopButton    { "Loop the whole track (L)", IconButton::Icon::loop };
 
     juce::Slider crossfadeSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
-    juce::TextButton residualButton, curveButton, centreButton;
+    HwButton residualButton { HwButton::Kind::pad }, curveButton { HwButton::Kind::pad }, centreButton { HwButton::Kind::pad };
 
-    juce::Slider masterSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
+    juce::Slider masterSlider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
     ClipButton clipButton;
-    std::array<LevelMeter, 2> outMeters;    // horizontal (set in the constructor)
 
     void setTime (const juce::String& time, const juce::String& samples);
     void setCrossfadeReadout (const juce::String&);
@@ -51,7 +48,7 @@ public:
 private:
     struct Metrics
     {
-        int transportW, masterW, rowH, xfH, masterH, padX, padY, gap;
+        int transportW, masterW, transportH, xfH, masterH, padX, padY, gap;
     };
     Metrics metrics() const;
     bool needsTwoRows (int width) const;
@@ -60,7 +57,7 @@ private:
     bool crossfadeDimmed = false;
     juce::String timeText { "0:00.000" }, sampleText, xfReadout, gainText;
 
-    juce::Rectangle<int> timeBox, xfLabelRow, hintArea, masterBox, masterLabelRow;
+    juce::Rectangle<int> timeBox, xfLabelRow, masterLabel, clipLabel;
 };
 
 } // namespace stemab

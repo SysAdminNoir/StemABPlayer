@@ -9,8 +9,8 @@ namespace stemab
 
 /** Transparent layer over the whole waveform column (ruler + every lane):
 
-      - draws the played-region darkening, the single playhead (2 px line with glow, triangle cap, m:ss time
-        bubble on the ruler) and, before any session, a centred hint;
+      - draws the played-region darkening, the single playhead (white 1 px line with a soft glow, an m:ss.t
+        time tag centred on it at the top of the ruler) and, before any session, a centred hint;
       - turns click / drag anywhere into seeks: one on mouse-down, then at most ~30 per second while dragging
         (the drawn playhead follows the mouse at once), and the last position on mouse-up.
 

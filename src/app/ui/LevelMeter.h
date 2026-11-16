@@ -5,32 +5,38 @@
 namespace stemab
 {
 
-/** One channel of a level meter: an RMS bar plus a peak tick, -60..0 dBFS, the tick red above 0 dBFS.
-    A new peak holds for 0.5 s, then falls back at 20 dB/s (the engine's peak is read-and-reset per tick).
-    Fed by the UI timer through setLevels(); repaints only when what it shows changes. */
+/** One channel of a fine LED meter: 40 cells of 1.5 dB from -60 to 0 dBFS (fewer, coarser cells when the meter
+    is too small for 40), green -> amber (from -12 dB) -> red (from -3 dB). The lit bar follows the RMS level;
+    one more cell shows the peak, which holds for 0.5 s, then falls back at 20 dB/s (the engine's peak is
+    read-and-reset per tick). Fed by the UI timer through setLevels(); repaints only when a cell changes.
+
+    It draws only the cells; the housing (sunken well, glass sheen) is the parent's. */
 class LevelMeter final : public juce::Component
 {
 public:
     enum class Orientation { vertical, horizontal };
 
-    /** `solid`: transparent = the green/amber/red meter gradient; otherwise a single colour (stem meters). */
-    explicit LevelMeter (Orientation = Orientation::vertical, juce::Colour solid = juce::Colours::transparentBlack);
+    explicit LevelMeter (Orientation = Orientation::vertical);
 
     void setLevels (float peak, float rms);     // linear
     void setOrientation (Orientation);
-    void setSolidColour (juce::Colour);
-    void setBackgroundColour (juce::Colour);
     void reset();
 
     float getShownPeak() const noexcept     { return shownPeak; }
 
+    /** The cell count for a meter `extent` pixels long (40 when 1.5 dB cells fit at >= 2 px each). */
+    static int cellsFor (int extent) noexcept;
+
     void paint (juce::Graphics&) override;
 
 private:
+    struct Cells { int lit = 0, peak = -1; };
+    Cells cellsToShow (int n) const noexcept;
+    int extent() const noexcept;
+
     Orientation orientation;
-    juce::Colour solidColour, background;
     float shownPeak = 0.0f, shownRms = 0.0f;
-    float paintedPeak = -1.0f, paintedRms = -1.0f;   // in meter proportions, to skip no-op repaints
+    Cells painted { -1, -2 };
 
     static constexpr double peakHoldMs = 500.0;       // a new peak stays put this long before falling
     static constexpr double peakFallDbPerSec = 20.0;  // then falls back at this rate

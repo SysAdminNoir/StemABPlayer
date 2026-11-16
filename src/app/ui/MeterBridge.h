@@ -9,8 +9,9 @@
 namespace stemab
 {
 
-/** The vertical meter bridge right of the track area: "LEVELS", a dB scale, three stereo meters
-    A / B / OUT, the Live Null Depth readout and per-meter peak dB readouts. */
+/** The meter column right of the waveform screen: "LEVELS", a meter screen with a dB scale and three LED bus
+    meters A / B / OUT (two bars each, L and R, in a sunken housing with a glass sheen), the held peak of each
+    bus under its label, and the live "NULL DEPTH" screen. */
 class MeterBridge final : public juce::Component
 {
 public:
@@ -24,18 +25,19 @@ public:
     void setUiScale (float);
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
     void resized() override;
 
 private:
-    std::array<std::array<LevelMeter, 2>, 3> meters;   // vertical, meter gradient
+    std::array<std::array<LevelMeter, 2>, 3> meters;
 
     std::array<juce::String, 3> readouts;
     juce::String liveNull;
     float uiScale = 1.0f;
     int tick = 0;
 
-    juce::Rectangle<int> levelsLabel, scaleColumn, nullBox, readoutRow;
-    std::array<juce::Rectangle<int>, 3> meterLabels;
+    juce::Rectangle<int> levelsLabel, meterScreen, scaleColumn, nullBox;
+    std::array<juce::Rectangle<int>, 3> housings, meterLabels, readoutRows;
 };
 
 } // namespace stemab

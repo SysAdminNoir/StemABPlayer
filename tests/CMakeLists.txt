@@ -12,7 +12,10 @@ add_executable(StemAB_Tests
     SessionStateTests.cpp
     WaveformSummaryTests.cpp
     # The resume-session value type lives with the app but needs only juce_core: tested here directly.
-    ${PROJECT_SOURCE_DIR}/src/app/SessionState.cpp)
+    ${PROJECT_SOURCE_DIR}/src/app/SessionState.cpp
+    # The settings file (juce_data_structures): the colour-palette round trip, in a temporary file.
+    AppSettingsTests.cpp
+    ${PROJECT_SOURCE_DIR}/src/app/AppSettings.cpp)
 
 # StemAB_JuceModules compiles the JUCE module implementations into this exe (once); the static libs
 # only see JUCE headers. StemAB_Decode brings FFmpeg, whose DLLs vcpkg's applocal step copies beside
@@ -23,6 +26,7 @@ target_link_libraries(StemAB_Tests PRIVATE
     StemAB_Decode
     StemAB_Load
     StemAB_JuceModules
+    juce::juce_data_structures
     Catch2::Catch2WithMain)
 
 # Real-file tests look for "Audio Files/" and "Stem Files/" under this folder and SKIP when they are absent.

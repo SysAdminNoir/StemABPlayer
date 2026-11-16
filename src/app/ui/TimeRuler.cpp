@@ -8,7 +8,7 @@ namespace stemab
 
 TimeRuler::TimeRuler()
 {
-    setOpaque (true);
+    setOpaque (false);
     setInterceptsMouseClicks (false, false);
 }
 
@@ -29,9 +29,9 @@ void TimeRuler::setUiScale (float s)
 
 void TimeRuler::paint (juce::Graphics& g)
 {
+    // Transparent: the waveform screen shows through. A 1 px #16263A border along the bottom.
     const auto bounds = getLocalBounds();
-    g.fillAll (theme::colour (theme::panelArgb));
-    g.setColour (theme::colour (theme::hairlineArgb));
+    g.setColour (theme::colour (theme::C::screenLine));
     g.fillRect (0, bounds.getHeight() - 1, bounds.getWidth(), 1);
 
     if (length <= 0 || rate <= 0.0 || bounds.getWidth() <= 0)
@@ -44,20 +44,21 @@ void TimeRuler::paint (juce::Graphics& g)
     while (step * pxPerSecond < 56.0 * uiScale && step < seconds)
         step *= 2.0;
 
-    const auto font = theme::monoFont (theme::em (0.68f, uiScale));
-    const int pad = theme::scaled (5.0f, uiScale);
+    const auto font = theme::monoFont (10.0f * uiScale);
+    const int pad = theme::scaled (6.0f, uiScale);
+    const int tickH = theme::scaled (5.0f, uiScale);
     g.setFont (font);
 
     for (double t = 0.0; t < seconds; t += step)
     {
         const int x = juce::roundToInt (t * pxPerSecond);
-        g.setColour (theme::colour (theme::hairline2Argb));
-        g.fillRect (x, 0, 1, bounds.getHeight());
+        g.setColour (theme::colour (theme::C::screenLine));
+        g.fillRect (x, bounds.getHeight() - 1 - tickH, 1, tickH);
 
-        g.setColour (theme::colour (theme::mutedTextArgb));
+        g.setColour (theme::colour (theme::C::screenDim));
         g.drawText (format::minutesSeconds (t),
-                    juce::Rectangle<int> (x + pad, 0, theme::scaled (60.0f, uiScale), bounds.getHeight() - pad),
-                    juce::Justification::bottomLeft, false);
+                    juce::Rectangle<int> (x + pad, pad, theme::scaled (60.0f, uiScale), juce::roundToInt (font.getHeight())),
+                    juce::Justification::topLeft, false);
     }
 }
 

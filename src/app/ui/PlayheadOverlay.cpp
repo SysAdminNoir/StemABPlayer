@@ -63,7 +63,10 @@ juce::int64 PlayheadOverlay::xToSample (float x) const noexcept
 
 juce::String PlayheadOverlay::bubbleText() const
 {
-    return rate > 0.0 ? format::minutesSeconds ((double) shownSample / rate) : juce::String();
+    if (rate <= 0.0)
+        return {};
+    const auto tenths = (juce::int64) ((double) shownSample / rate * 10.0);      // m:ss.t, truncated
+    return format::minutesSeconds ((double) (tenths / 10)) + "." + juce::String ((int) (tenths % 10));
 }
 
 juce::Rectangle<int> PlayheadOverlay::stripAround (float x) const
@@ -157,8 +160,8 @@ void PlayheadOverlay::paint (juce::Graphics& g)
     {
         if (hint.isNotEmpty())
         {
-            g.setColour (theme::colour (theme::mutedTextArgb));
-            g.setFont (theme::uiFont (theme::em (1.0f, uiScale)));
+            g.setColour (theme::colour (theme::C::screenDim));
+            g.setFont (theme::monoFont (13.0f * uiScale));
             g.drawText (hint, getLocalBounds().withTrimmedTop (rulerHeight), juce::Justification::centred, true);
         }
         paintedX = -1.0f;
@@ -170,42 +173,35 @@ void PlayheadOverlay::paint (juce::Graphics& g)
     paintedBubble = bubbleText();
 
     // Played region
-    g.setColour (juce::Colour (8, 10, 13).withAlpha (0.5f));
+    g.setColour (theme::colour (theme::C::screen).withAlpha (0.45f));
     for (auto area : darkenAreas)
         if (x > (float) area.getX())
             g.fillRect (area.toFloat().withRight (juce::jmin ((float) area.getRight(), x)));
 
-    // Playhead: soft glow, then the 2 px line
+    // Playhead: a white 1 px line with a soft glow (0 0 8px #fff)
     const float h = (float) getHeight();
-    for (const auto [w, a] : { std::pair<float, float> { 10.0f, 0.06f }, { 6.0f, 0.10f }, { 4.0f, 0.18f } })
+    const float lineW = juce::jmax (1.0f, std::round (uiScale));
+    for (const auto [w, a] : { std::pair<float, float> { 16.0f, 0.05f }, { 10.0f, 0.08f }, { 5.0f, 0.14f } })
     {
         g.setColour (juce::Colours::white.withAlpha (a));
-        g.fillRect (juce::Rectangle<float> (x - w * 0.5f, 0.0f, w, h));
+        g.fillRect (juce::Rectangle<float> (x - w * uiScale * 0.5f, 0.0f, w * uiScale, h));
     }
     g.setColour (juce::Colours::white);
-    g.fillRect (juce::Rectangle<float> (x - 1.0f, 0.0f, 2.0f, h));
+    g.fillRect (juce::Rectangle<float> (std::floor (x - lineW * 0.5f), 0.0f, lineW, h));
 
-    // Cap
-    const float capHalf = 7.0f * uiScale, capH = 9.0f * uiScale;
-    juce::Path cap;
-    cap.addTriangle (x - capHalf, 0.0f, x + capHalf, 0.0f, x, capH);
-    g.fillPath (cap);
-
-    // Time bubble on the ruler
+    // The time tag, centred on the line at the top of the ruler (mono 600 10px, white, #0B1622 text)
     if (paintedBubble.isNotEmpty())
     {
-        const auto font = theme::monoFont (theme::em (0.68f, uiScale));
+        const auto font = theme::monoFont (10.0f * uiScale, true);
         const float padX = 5.0f * uiScale, padY = 1.0f * uiScale;
         const float tw = juce::GlyphArrangement::getStringWidth (font, paintedBubble);
         const float bw = tw + 2.0f * padX, bh = font.getHeight() + 2.0f * padY;
-        float bx = x + 10.0f * uiScale;
-        if (bx + bw > (float) getWidth())
-            bx = x - 10.0f * uiScale - bw;
+        const float bx = juce::jlimit (0.0f, juce::jmax (0.0f, (float) getWidth() - bw), x - bw * 0.5f);
         const juce::Rectangle<float> box (bx, 4.0f * uiScale, bw, bh);
 
         g.setColour (juce::Colours::white);
-        g.fillRoundedRectangle (box, 3.0f * uiScale);
-        g.setColour (theme::colour (theme::groundArgb));
+        g.fillRoundedRectangle (box, 2.0f * uiScale);
+        g.setColour (theme::colour (theme::C::inkDark));
         g.setFont (font);
         g.drawText (paintedBubble, box, juce::Justification::centred, false);
     }

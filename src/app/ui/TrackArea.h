@@ -14,10 +14,12 @@
 namespace stemab
 {
 
-/** The track area: a header column (A, the "B - Stem Sum" group row, the four Stems, R) beside the waveform
-    column (time ruler + one lane per track), with one PlayheadOverlay over the whole waveform column.
+/** The track area: the channel column (raised strips: Original, the "B Stem Sum" group label, the four Stems,
+    Residual) beside one sunken waveform screen (time ruler, the A lane, a group gap, four stem lanes and the
+    Residual lane, 1 px separators), with one PlayheadOverlay over the whole screen. Each strip lines up with
+    its lane.
 
-    Lanes grow to fill the available height (A is 1.5x a stem lane, R 0.6x); when even the minimum lane
+    Lanes grow to fill the available height (A is 1.5x a stem lane, R 0.8x); when even the minimum lane
     height does not fit, the area scrolls vertically (juce::Viewport). Every metric follows setUiScale(). */
 class TrackArea final : public juce::Component
 {
@@ -46,6 +48,9 @@ public:
     /** The R lane's view gain: +24 dB (visible) or the true level. Display only (the audio is untouched). */
     void setResidualAmplified (bool);
     bool isResidualAmplified() const noexcept           { return residualAmplified; }
+
+    /** The palette changed: lane colours (re-rendered waveform images) and a repaint. */
+    void refreshPalette();
 
     /** Timer tick. */
     void update (juce::int64 playheadSample)            { overlay.update (playheadSample); }
@@ -87,8 +92,8 @@ private:
     std::array<std::unique_ptr<WaveformLane>, numStems> stemLanes;
     PlayheadOverlay overlay;
 
-    juce::Rectangle<int> tracksCell, groupHeaderRow, groupLaneRow;
-    int headerWidth = 196;
+    juce::Rectangle<int> channelsLabel, groupLabel, screenArea;
+    juce::Array<int> separatorYs;
 };
 
 } // namespace stemab

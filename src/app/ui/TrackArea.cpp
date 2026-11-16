@@ -11,41 +11,39 @@ namespace stemab
 namespace
 {
     // Base metrics at 100 % interface scale (the mockup).
-    constexpr float headerColumnPx = 196.0f;
-    constexpr float rulerPx = 30.0f;
-    constexpr float groupRowPx = 28.0f;
+    constexpr float channelColumnPx = 206.0f;
+    constexpr float columnGapPx = 14.0f;
+    constexpr float rulerPx = 24.0f;
+    constexpr float groupRowPx = 22.0f;
+    constexpr float screenBottomPx = 6.0f;
     constexpr float minLanePx = 56.0f;
-    constexpr float aLaneFactor = 1.5f, rLaneFactor = 0.6f;
+    constexpr float aLaneFactor = 1.5f, rLaneFactor = 0.8f;
     constexpr float residualViewGain = 16.0f;   // +24 dB, so the Residual is visible
 
-    const juce::String middleDot (juce::CharPointer_UTF8 ("\xc2\xb7"));
+    using theme::C;
 }
 
 TrackArea::TrackArea()
 {
-    using theme::colour;
-
-    aHeader = std::make_unique<TrackHeader> (TrackHeader::Style {
-        colour (theme::colourAArgb), colour (theme::panelArgb), "A", " " + middleDot + " Original", 1.0f, false, true });
-    rHeader = std::make_unique<TrackHeader> (TrackHeader::Style {
-        colour (theme::residualArgb), colour (theme::residualLaneArgb), "R", " " + middleDot + " Residual", 0.88f, false, false, true });
+    aHeader = std::make_unique<TrackHeader> (TrackHeader::Style { TrackHeader::Kind::original, C::colourA, "Original",
+                                                                  false, true, false });
+    rHeader = std::make_unique<TrackHeader> (TrackHeader::Style { TrackHeader::Kind::residual, C::accent, "Residual",
+                                                                  false, false, true });
     rHeader->viewGain.setTooltip ("Residual waveform: amplified +24 dB so it is visible, or at its true level (0 dB)");
     rHeader->viewGain.onClick = [this] { setResidualAmplified (! residualAmplified); };
 
-    aLane = std::make_unique<WaveformLane> (colour (theme::colourAArgb), colour (theme::laneArgb), true);
+    aLane = std::make_unique<WaveformLane> (theme::colour (C::colourA), WaveformLane::Look::outline);
     aLane->setVerticalPadding (8.0f);
-    rLane = std::make_unique<WaveformLane> (colour (theme::residualArgb), colour (theme::residualLaneArgb), false);
-    rLane->setVerticalPadding (5.0f);
+    rLane = std::make_unique<WaveformLane> (theme::colour (C::accent), WaveformLane::Look::filledPeak);
+    rLane->setVerticalPadding (4.0f);
     setResidualAmplified (true);
 
     for (int i = 0; i < numStems; ++i)
     {
-        const auto c = colour (theme::stemArgb[(size_t) i]);
         stemHeaders[(size_t) i] = std::make_unique<TrackHeader> (TrackHeader::Style {
-            c, colour (theme::panelArgb), {}, stemName ((Stem) i), 0.92f, true, true });
-        stemHeaders[(size_t) i]->setSubLabel ("Stem " + juce::String (i + 1) + " of " + juce::String (numStems));
+            TrackHeader::Kind::stem, theme::stemRole (i), stemName ((Stem) i), true, true, false });
 
-        stemLanes[(size_t) i] = std::make_unique<WaveformLane> (c, colour (theme::laneArgb), true);
+        stemLanes[(size_t) i] = std::make_unique<WaveformLane> (theme::stemColour (i), WaveformLane::Look::outline);
         stemLanes[(size_t) i]->setVerticalPadding (6.0f);
     }
 
@@ -140,9 +138,24 @@ void TrackArea::setResidualAmplified (bool amplified)
     rLane->setDisplayGain (amplified ? residualViewGain : 1.0f);
 
     const juce::String minus (juce::CharPointer_UTF8 ("\xe2\x88\x92"));
-    rHeader->viewGain.setButtonText (amplified ? "+24 dB" : "0 dB");
+    rHeader->viewGain.setButtonText (amplified ? "+24" : "0 dB");
     rHeader->viewGain.setToggleState (amplified, juce::dontSendNotification);
-    rHeader->setSubLabel ("A " + minus + " all stems");   // the button itself shows the view gain
+    rHeader->setSubLabel ("A " + minus + " all stems");   // the pad itself shows the view gain
+}
+
+void TrackArea::refreshPalette()
+{
+    aLane->setColour (theme::colour (C::colourA));
+    rLane->setColour (theme::colour (C::accent));
+    for (int i = 0; i < numStems; ++i)
+        stemLanes[(size_t) i]->setColour (theme::stemColour (i));
+
+    aHeader->repaint();
+    rHeader->repaint();
+    for (auto& h : stemHeaders)
+        h->repaint();
+    content.repaint();
+    repaint();
 }
 
 void TrackArea::updateStemPlaceholders()
@@ -176,14 +189,14 @@ void TrackArea::setHint (const juce::String& h)
 //==============================================================================
 int TrackArea::laneHeightFor (int viewportHeight) const
 {
-    const float fixed = (rulerPx + groupRowPx) * uiScale;
+    const float fixed = (rulerPx + groupRowPx + screenBottomPx) * uiScale;
     const float fill = ((float) viewportHeight - fixed) / (aLaneFactor + (float) numStems + rLaneFactor);
     return juce::jmax (theme::scaled (minLanePx, uiScale), (int) std::floor (fill));
 }
 
 int TrackArea::contentHeightFor (int lane) const
 {
-    return theme::scaled (rulerPx, uiScale) + theme::scaled (groupRowPx, uiScale)
+    return theme::scaled (rulerPx, uiScale) + theme::scaled (groupRowPx, uiScale) + theme::scaled (screenBottomPx, uiScale)
            + juce::roundToInt ((float) lane * aLaneFactor) + numStems * lane + juce::roundToInt ((float) lane * rLaneFactor);
 }
 
@@ -202,39 +215,48 @@ void TrackArea::resized()
 
 void TrackArea::layoutContent (int width, int lane)
 {
-    headerWidth = theme::scaled (headerColumnPx, uiScale);
+    const int columnW = theme::scaled (channelColumnPx, uiScale);
+    const int screenX = columnW + theme::scaled (columnGapPx, uiScale);
+    const int screenW = juce::jmax (1, width - screenX);
     const int rulerH = theme::scaled (rulerPx, uiScale);
     const int groupH = theme::scaled (groupRowPx, uiScale);
     const int aH = juce::roundToInt ((float) lane * aLaneFactor);
     const int rH = juce::roundToInt ((float) lane * rLaneFactor);
-    const int laneW = juce::jmax (1, width - headerWidth);
+
+    separatorYs.clearQuick();
 
     int y = 0;
-    tracksCell = { 0, y, headerWidth, rulerH };
-    ruler.setBounds (headerWidth, y, laneW, rulerH);
+    channelsLabel = { 0, y, columnW, rulerH };
+    ruler.setBounds (screenX, y, screenW, rulerH);
     y += rulerH;
 
     juce::Array<juce::Rectangle<int>> darken;
     const auto place = [&] (TrackHeader& header, WaveformLane& l, int h)
     {
-        header.setBounds (0, y, headerWidth - 1, h);
-        l.setBounds (headerWidth, y, laneW, h);
-        darken.add ({ 0, y, laneW, h });
+        header.setBounds (0, y, columnW, h);
+        l.setBounds (screenX, y, screenW, h);
+        darken.add ({ 0, y, screenW, h });
         y += h;
     };
 
     place (*aHeader, *aLane, aH);
+    separatorYs.add (y - 1);                // A's bottom border
 
-    groupHeaderRow = { 0, y, headerWidth - 1, groupH };
-    groupLaneRow = { headerWidth, y, laneW, groupH };
+    groupLabel = { 0, y, columnW, groupH };
     y += groupH;
 
     for (int i = 0; i < numStems; ++i)
+    {
+        separatorYs.add (y);                // each stem lane's top border
         place (*stemHeaders[(size_t) i], *stemLanes[(size_t) i], lane);
+    }
 
+    separatorYs.add (y);                    // the Residual lane's top border
     place (*rHeader, *rLane, rH);
+    y += theme::scaled (screenBottomPx, uiScale);
 
-    overlay.setBounds (headerWidth, 0, laneW, y);
+    screenArea = { screenX, 0, screenW, y };
+    overlay.setBounds (screenX, 0, screenW, y);
     overlay.setRulerHeight (rulerH);
     overlay.setDarkenAreas (darken);
     content.repaint();
@@ -242,49 +264,29 @@ void TrackArea::layoutContent (int width, int lane)
 
 void TrackArea::paint (juce::Graphics& g)
 {
-    g.fillAll (theme::colour (theme::trackBgArgb));
+    g.fillAll (theme::colour (C::ground));
 }
 
 void TrackArea::paintContent (juce::Graphics& g)
 {
     using theme::colour;
-    g.fillAll (colour (theme::trackBgArgb));
+    const float s = uiScale;
+    g.fillAll (colour (C::ground));
 
-    // Header column background and its right border
-    g.setColour (colour (theme::panelArgb));
-    g.fillRect (0, 0, headerWidth, content.getHeight());
-    g.setColour (colour (theme::hairlineArgb));
-    g.fillRect (headerWidth - 1, 0, 1, content.getHeight());
+    // The waveform screen and its lane separators (the lanes and the ruler are transparent)
+    theme::drawScreen (g, screenArea.toFloat(), s);
+    g.setColour (colour (C::screenLine));
+    for (const int y : separatorYs)
+        g.fillRect (screenArea.getX(), y, screenArea.getWidth(), 1);
 
-    // "TRACKS"
-    g.setColour (colour (theme::mutedTextArgb));
-    theme::drawTrackedText (g, "TRACKS", tracksCell.toFloat().withTrimmedLeft (12.0f * uiScale),
-                            theme::uiFont (theme::em (0.68f, uiScale)), 0.12f, juce::Justification::centredLeft);
-    g.setColour (colour (theme::hairlineArgb));
-    g.fillRect (tracksCell.getX(), tracksCell.getBottom() - 1, tracksCell.getWidth(), 1);
+    // Channel column labels: "CHANNELS" and the "B STEM SUM" group row
+    theme::drawSilk (g, "Channels", channelsLabel.toFloat(), 10.0f * s, colour (C::silk));
 
-    // Group row "B - STEM SUM - SUM OF 4 STEMS", both columns
-    g.setColour (colour (theme::groupRowArgb));
-    g.fillRect (groupHeaderRow);
-    g.fillRect (groupLaneRow);
-    g.setColour (colour (theme::hairlineArgb));
-    g.fillRect (groupHeaderRow.getX(), groupHeaderRow.getBottom() - 1, groupHeaderRow.getWidth(), 1);
-    g.fillRect (groupLaneRow.getX(), groupLaneRow.getBottom() - 1, groupLaneRow.getWidth(), 1);
-
-    auto row = groupHeaderRow.toFloat().withTrimmedLeft (12.0f * uiScale).withTrimmedBottom (1.0f);
-    const auto badgeFont = theme::uiFont (theme::em (0.72f, uiScale), true);
-    const float badgeW = juce::GlyphArrangement::getStringWidth (badgeFont, "B") + 10.0f * uiScale;
-    const auto badge = row.removeFromLeft (badgeW).withSizeKeepingCentre (badgeW, badgeFont.getHeight() + 2.0f * uiScale);
-    g.setColour (colour (theme::colourBArgb));
-    g.fillRoundedRectangle (badge, 3.0f * uiScale);
-    g.setColour (colour (theme::groundArgb));
-    g.setFont (badgeFont);
-    g.drawText ("B", badge, juce::Justification::centred, false);
-
-    row.removeFromLeft (8.0f * uiScale);
-    g.setColour (colour (theme::mutedTextArgb));
-    theme::drawTrackedText (g, "STEM SUM " + middleDot + " " + juce::String (juce::CharPointer_UTF8 ("\xce\xa3")) + " 4 STEMS",
-                            row, theme::uiFont (theme::em (0.72f, uiScale)), 0.1f, juce::Justification::centredLeft);
+    const float px = 10.0f * s;
+    auto row = groupLabel.toFloat();
+    theme::drawSilk (g, "B", row.removeFromLeft (theme::silkWidth ("B", px) + 1.0f), px, colour (C::colourB));
+    row.removeFromLeft (8.0f * s);
+    theme::drawSilk (g, "Stem sum", row, px, colour (C::silk));
 }
 
 } // namespace stemab

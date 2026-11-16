@@ -22,7 +22,8 @@ namespace
 
     using theme::scaleSteps;
     using theme::defaultScaleIndex;
-    constexpr float bridgeWidthPx = 168.0f;
+    using theme::C;
+    constexpr float bridgeWidthPx = 150.0f;
 
     const juce::String middleDot (juce::CharPointer_UTF8 ("\xc2\xb7"));
     const juce::String minusSign (juce::CharPointer_UTF8 ("\xe2\x88\x92"));
@@ -48,23 +49,28 @@ namespace
         }
     }
 
-    HeaderBar::Segment seg (const juce::String& text, juce::uint32 argb, bool mono = false)
+    HeaderBar::Segment seg (const juce::String& text, C role, bool mono = true)
     {
-        return { text, theme::colour (argb), mono, false };
+        return { text, theme::colour (role), mono, false, false };
     }
 
-    HeaderBar::Segment dot (juce::uint32 argb)
+    HeaderBar::Segment silk (const juce::String& text, C role = C::silkDim)
     {
-        return { {}, theme::colour (argb), false, true };
+        return { text, theme::colour (role), false, false, true };
     }
 
-    /** e.g. "FLAC - 44.1 kHz - stereo" (middle dots) for A's header. */
+    HeaderBar::Segment dot (C role)
+    {
+        return { {}, theme::colour (role), false, true, false };
+    }
+
+    /** e.g. "FLAC 44.1k stereo" for the Original strip. */
     juce::String originalSubLabel (const juce::String& fileName, double sampleRate)
     {
         const auto ext = juce::File::createFileWithoutCheckingPath (fileName).getFileExtension()
                              .trimCharactersAtStart (".").toUpperCase();
-        return (ext.isNotEmpty() ? ext + " " + middleDot + " " : juce::String())
-               + format::kiloHertz (sampleRate) + " " + middleDot + " stereo";
+        return (ext.isNotEmpty() ? ext + " " : juce::String())
+               + format::kiloHertz (sampleRate).upToFirstOccurrenceOf (" kHz", false, false) + "k stereo";
     }
 }
 
@@ -82,6 +88,12 @@ MainComponent::MainComponent()
     loader.onStatusChanged = [this] { updateStatusText(); };
 
     scaleIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, settings.getScaleIndex (defaultScaleIndex));
+
+    // The saved colour palette, before anything is painted.
+    theme::setPalette (settings.getColourPalette() == AppSettings::Palette::colourBlindSafe ? theme::PaletteId::colourBlindSafe
+                                                                                          : theme::PaletteId::standard);
+    if (auto* lf = dynamic_cast<theme::StemLookAndFeel*> (&juce::LookAndFeel::getDefaultLookAndFeel()))
+        lf->applyPalette();
 
     // Waveform summaries arrive on the message thread (stale ones are dropped by the builder).
     waveforms.onOriginalReady = [this] (WaveformBuilder::SummaryPtr s)
@@ -262,9 +274,38 @@ void MainComponent::setScaleIndex (int index)
     settings.setScaleIndex (scaleIndex);
 }
 
+void MainComponent::setPalette (AppSettings::Palette palette)
+{
+    settings.setColourPalette (palette);
+    settings.save();
+
+    theme::setPalette (palette == AppSettings::Palette::colourBlindSafe ? theme::PaletteId::colourBlindSafe
+                                                                        : theme::PaletteId::standard);
+    if (auto* lf = dynamic_cast<theme::StemLookAndFeel*> (&juce::LookAndFeel::getDefaultLookAndFeel()))
+        lf->applyPalette();
+
+    tracks.refreshPalette();        // re-renders the waveform images in the new lane colours
+    updateStatusText();
+    updateMixButtons();
+
+    if (preferences != nullptr)
+    {
+        preferences->getPanel().setPalette (palette);
+        preferences->refreshPalette();
+    }
+
+    // Every window (and every child) picks up the LookAndFeel colours again and repaints.
+    for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
+        if (auto* c = juce::Desktop::getInstance().getComponent (i))
+        {
+            c->sendLookAndFeelChange();
+            c->repaint();
+        }
+}
+
 void MainComponent::paint (juce::Graphics& g)
 {
-    g.fillAll (theme::colour (theme::groundArgb));
+    g.fillAll (theme::colour (C::ground));
 }
 
 void MainComponent::resized()
@@ -274,7 +315,11 @@ void MainComponent::resized()
 
     header.setBounds (r.removeFromTop (header.getPreferredHeight()));
     deck.setBounds (r.removeFromBottom (deck.getPreferredHeight (r.getWidth())));
+
+    // The screen area: padding 14 18 10 (the status line above already gives some air), the meters on the right
+    r = r.withTrimmedTop (theme::scaled (6.0f, s)).withTrimmedBottom (theme::scaled (10.0f, s)).reduced (theme::scaled (18.0f, s), 0);
     bridge.setBounds (r.removeFromRight (theme::scaled (bridgeWidthPx, s)));
+    r.removeFromRight (theme::scaled (14.0f, s));
     tracks.setBounds (r);
 }
 
@@ -382,12 +427,12 @@ void MainComponent::timerCallback()
 
     if (len > 0 && rate > 0.0 && loader.getPlaybackSession() != nullptr)
         deck.setTime (format::minutesSecondsMillis ((double) playhead / rate),
-                      "Sample: " + format::withThousands (playhead) + "\nTotal:  " + format::withThousands (len));
+                      "Sample " + format::withThousands (playhead) + "\nTotal " + format::withThousands (len));
     else if (previewLength > 0 && previewRate > 0.0)
-        deck.setTime ("0:00.000", "preview only (" + format::minutesSecondsMillis ((double) previewLength / previewRate)
-                                      + "): open the other file to play");
+        deck.setTime ("0:00.000", "Preview only " + middleDot + " " + format::minutesSecondsMillis ((double) previewLength / previewRate)
+                                      + "\nOpen the other file to play");
     else
-        deck.setTime ("0:00.000", "no track loaded");
+        deck.setTime ("0:00.000", "No track loaded");
 
     tracks.update (playhead);
 
@@ -413,8 +458,6 @@ void MainComponent::timerCallback()
                 aPeak = juce::jmax (aPeak, reading.peak);
                 aRms = juce::jmax (aRms, reading.rms);
             }
-            if (m == MeterBridge::out)
-                deck.outMeters[(size_t) c].setLevels (reading.peak, reading.rms);
         }
     if (auto* m = tracks.getOriginalHeader().getMeter())
         m->setLevels (aPeak, aRms);
@@ -612,6 +655,7 @@ void MainComponent::showPreferences()
         PreferencesPanel::Callbacks callbacks;
         callbacks.builtInFolder = [this] (AppSettings::Folder f) { return builtInFolder (f); };
         callbacks.setScaleIndex = [this] (int index) { setScaleIndex (index); };
+        callbacks.setPalette = [this] (AppSettings::Palette p) { setPalette (p); };
 
         preferences = std::make_unique<PreferencesWindow> (settings, deviceManager, std::move (callbacks));
         preferences->onClosed = [this]
@@ -808,7 +852,7 @@ void MainComponent::updateStatusText()
     // Left: errors, progress, notices
     if (st.error.isNotEmpty())
     {
-        left.add (seg ("ERROR: " + st.error, theme::meterClipArgb));
+        left.add (seg ("ERROR: " + st.error, C::meterRed));
         lines.add ("ERROR: " + st.error);
     }
 
@@ -819,9 +863,9 @@ void MainComponent::updateStatusText()
                                 : hasB && ! hasA ? "Stem file chosen - waiting for an original"
                                                  : "Choose an original and a stem file";
         if (st.error.isEmpty())
-            left.add (seg (idle, theme::mutedTextArgb));
+            left.add (seg (idle, C::muted));
         if (previews.isOriginalPending() || previews.isStemsPending())
-            left.add (seg ("   Rendering preview" + ellipsis, theme::textArgb));
+            left.add (seg ("   Rendering preview" + ellipsis, C::text));
         lines.add ("Status:  " + idle);
     }
     else
@@ -857,9 +901,9 @@ void MainComponent::updateStatusText()
             timing << ", B after " << secs (st.timeToStems);
 
         if (st.progress.isNotEmpty())
-            left.add (seg (st.progress, st.busy ? theme::textArgb : theme::mutedTextArgb));
+            left.add (seg (st.progress, st.busy ? C::text : C::muted));
         if (timing.isNotEmpty())
-            left.add (seg ("   " + timing, theme::mutedTextArgb));
+            left.add (seg ("   " + timing, C::muted));
 
         lines.add ("Status:  " + st.progress + (timing.isNotEmpty() ? "    " + timing : juce::String()));
         lines.add ("         " + stages);
@@ -867,36 +911,38 @@ void MainComponent::updateStatusText()
 
     if (st.notice.isNotEmpty())
     {
-        left.add (seg ("   Note: " + st.notice, theme::amberArgb));
+        left.add (seg ("   Note: " + st.notice, C::amber));
         lines.add ("Note:  " + st.notice);
     }
 
     if (previewNotice.isNotEmpty())
     {
-        left.add (seg ("   Note: " + previewNotice, theme::amberArgb));
+        left.add (seg ("   Note: " + previewNotice, C::amber));
         lines.add ("Note:  " + previewNotice);
     }
 
     if (resumeNotice.isNotEmpty())
     {
-        left.add (seg ("   Note: " + resumeNotice, theme::amberArgb));
+        left.add (seg ("   Note: " + resumeNotice, C::amber));
         lines.add ("Note:  " + resumeNotice);
     }
 
     // Right: Alignment Offset, Track Null Depth, rate, device
-    const auto sep = [&right] { right.add (seg ("  " + middleDot + "  ", theme::mutedTextArgb)); };
+    const auto sep = [&right] { right.add (seg ("  " + middleDot + "  ", C::silkDim)); };
 
     if (st.hasAlignment)
     {
-        right.add (dot (st.lowConfidence ? theme::amberArgb : theme::goodArgb));
-        right.add (seg ("Aligned ", theme::mutedTextArgb));
-        right.add (seg (format::withThousands (st.offsetSamples, true) + " smp", theme::textArgb, true));
-        right.add (seg (" " + middleDot + " " + rho + " ", theme::mutedTextArgb));
-        right.add (seg (juce::String (st.confidence, 4), theme::textArgb, true));
+        right.add (dot (st.lowConfidence ? C::amber : C::go));
+        right.add (silk ("Aligned"));
+        right.add (seg (" " + format::withThousands (st.offsetSamples, true) + " smp", C::muted));
+        right.add (seg ("  " + rho + " ", C::silkDim));
+        right.add (seg (juce::String (st.confidence, 4), C::muted));
         if (st.polarity < 0)
-            right.add (seg (" " + middleDot + " polarity " + minusSign + "1", theme::amberArgb));
+            right.add (seg (" " + middleDot + " polarity " + minusSign + "1", C::amber));
         if (st.lowConfidence)
-            right.add (seg ("  LOW CONFIDENCE", theme::amberArgb));
+            right.add (seg ("  ", C::amber));
+        if (st.lowConfidence)
+            right.add (silk ("Low confidence", C::amber));
 
         lines.add ("Alignment Offset:  " + format::withThousands (st.offsetSamples, true) + " samples,  polarity "
                    + (st.polarity < 0 ? "-1 (inverted)" : "+1") + ",  confidence " + juce::String (st.confidence, 4)
@@ -908,8 +954,8 @@ void MainComponent::updateStatusText()
     {
         if (! right.isEmpty())
             sep();
-        right.add (seg ("Track Null Depth ", theme::mutedTextArgb));
-        right.add (seg (format::withMinusSign (juce::String (st.trackNullDepthDb, 1)) + " dB", theme::textArgb, true));
+        right.add (silk ("Track null depth"));
+        right.add (seg (" " + format::withMinusSign (juce::String (st.trackNullDepthDb, 1)) + " dB", C::muted));
         lines.add ("Track Null Depth:  " + juce::String (st.trackNullDepthDb, 1) + " dB");
     }
 
@@ -921,10 +967,10 @@ void MainComponent::updateStatusText()
     {
         if (! right.isEmpty())
             sep();
-        right.add (seg (d->getName() + " " + middleDot + " ", theme::mutedTextArgb));
-        right.add (seg (format::kiloHertz (d->getCurrentSampleRate()), theme::textArgb, true));
+        right.add (silk ("Device"));
+        right.add (seg (" " + d->getName() + " " + middleDot + " " + format::kiloHertz (d->getCurrentSampleRate()), C::muted));
         if (engine.isResampling())
-            right.add (seg (" (resampled)", theme::mutedTextArgb));
+            right.add (seg (" (resampled)", C::muted));
 
         dev << "Device:  " << deviceManager.getCurrentAudioDeviceType() << "  /  " << d->getName()
             << "   " << juce::String (d->getCurrentSampleRate(), 0) << " Hz,  buffer "
@@ -934,7 +980,7 @@ void MainComponent::updateStatusText()
     {
         if (! right.isEmpty())
             sep();
-        right.add (seg ("No audio device open", theme::meterClipArgb));
+        right.add (seg ("No audio device open", C::meterRed));
         dev << "No audio device open" << (initialiseError.isNotEmpty() ? " (" + initialiseError + ")" : juce::String());
     }
 

@@ -5,16 +5,18 @@
 namespace stemab
 {
 
+using theme::C;
+using theme::colour;
+
 namespace
 {
-    constexpr std::array<juce::uint32, 3> labelArgb { theme::colourAArgb, theme::colourBArgb, theme::amberArgb };
-    const char* const labelText[3] = { "A", "B", "OUT" };
-    constexpr float scaleMarksDb[] = { 0.0f, -6.0f, -12.0f, -24.0f, -36.0f, -60.0f };
+    constexpr std::array<C, 3> labelColours { C::colourA, C::colourB, C::text };
+    const char* const labelText[3] = { "A", "B", "Out" };
+    constexpr float scaleMarksDb[] = { 0.0f, -6.0f, -12.0f, -18.0f, -24.0f, -36.0f, -48.0f, -60.0f };
 }
 
 MeterBridge::MeterBridge()
 {
-    setOpaque (true);
     for (auto& pair : meters)
         for (auto& m : pair)
             addAndMakeVisible (m);
@@ -38,18 +40,15 @@ void MeterBridge::setLevels (int m, int channel, float peak, float rms)
     // Numeric readouts: the held (falling-back) peak, refreshed ~10 times a second so they stay readable.
     if (m == out && channel == 1 && ++tick % 3 == 0)
     {
-        bool changed = false;
         for (size_t i = 0; i < 3; ++i)
         {
             const auto text = theme::dbText (juce::jmax (meters[i][0].getShownPeak(), meters[i][1].getShownPeak()));
             if (text != readouts[i])
             {
                 readouts[i] = text;
-                changed = true;
+                repaint (readoutRows[i]);
             }
         }
-        if (changed)
-            repaint (readoutRow);
     }
 }
 
@@ -65,110 +64,146 @@ void MeterBridge::setLiveNullDepth (const juce::String& s)
 void MeterBridge::resized()
 {
     const auto s = uiScale;
-    auto r = getLocalBounds().withTrimmedLeft (1).reduced (theme::scaled (12.0f, s));
-    const int gap = theme::scaled (12.0f, s);
+    const auto px = [s] (float v) { return theme::scaled (v, s); };
+    auto r = getLocalBounds();
 
-    levelsLabel = r.removeFromTop (juce::roundToInt (theme::uiFont (theme::em (0.68f, s)).getHeight()));
-    r.removeFromTop (gap);
+    levelsLabel = r.removeFromTop (px (24.0f));
+    r.removeFromTop (px (10.0f));
 
-    const int readoutH = juce::roundToInt (theme::monoFont (theme::em (0.64f, s)).getHeight());
-    readoutRow = r.removeFromBottom (readoutH);
-    r.removeFromBottom (gap);
-
-    const int nullH = theme::scaled (16.0f, s) + juce::roundToInt (theme::uiFont (theme::em (0.64f, s)).getHeight())
-                      + theme::scaled (2.0f, s) + juce::roundToInt (theme::monoFont (theme::em (1.25f, s), true).getHeight());
+    // NULL DEPTH screen (padding 10 12): silk label + the 24 px value
+    const int nullH = px (10.0f + 13.0f + 2.0f + 28.0f + 10.0f);
     nullBox = r.removeFromBottom (nullH);
-    r.removeFromBottom (gap);
+    r.removeFromBottom (px (10.0f));
 
-    // Meters: scale column + three stereo meters with a label underneath.
-    const int labelH = juce::roundToInt (theme::uiFont (theme::em (0.72f, s), true).getHeight());
-    scaleColumn = r.removeFromLeft (theme::scaled (24.0f, s));
-    r.removeFromLeft (theme::scaled (6.0f, s));
+    // The meter screen (padding 12 8 10): scale column, then three bus meters centred
+    meterScreen = r;
+    auto inner = r.withTrimmedTop (px (12.0f)).withTrimmedBottom (px (10.0f)).reduced (px (8.0f), 0);
 
-    const int colGap = theme::scaled (10.0f, s);
-    const int colW = (r.getWidth() - 2 * colGap) / 3;
-    const int barGap = theme::scaled (3.0f, s);
+    const int scaleW = px (20.0f), colGap = px (7.0f);
+    const int chanW = juce::jmax (4, px (8.0f)), chanGap = juce::jmax (1, px (2.0f)), pad = juce::jmax (2, px (3.0f));
+    const int housingW = 2 * pad + 2 * chanW + chanGap;
+    const int totalW = scaleW + 3 * (colGap + housingW);
+    inner = inner.withSizeKeepingCentre (juce::jmin (inner.getWidth(), totalW), inner.getHeight());
 
-    for (int m = 0; m < 3; ++m)
+    scaleColumn = inner.removeFromLeft (scaleW);
+
+    const int labelH = px (16.0f), readoutH = px (13.0f);
+    for (size_t m = 0; m < 3; ++m)
     {
-        auto col = r.removeFromLeft (colW);
-        if (m < 2)
-            r.removeFromLeft (colGap);
+        inner.removeFromLeft (colGap);
+        auto col = inner.removeFromLeft (housingW);
+        readoutRows[m] = col.removeFromBottom (readoutH).expanded (px (6.0f), 0);
+        meterLabels[m] = col.removeFromBottom (labelH).expanded (px (6.0f), 0);
+        col.removeFromBottom (px (4.0f));
+        housings[m] = col;
 
-        meterLabels[(size_t) m] = col.removeFromBottom (labelH);
-        col.removeFromBottom (theme::scaled (6.0f, s));
-
-        const int barW = (col.getWidth() - barGap) / 2;
-        meters[(size_t) m][0].setBounds (col.removeFromLeft (barW));
-        meters[(size_t) m][1].setBounds (col.removeFromRight (barW));
+        auto cells = col.reduced (pad);
+        meters[m][0].setBounds (cells.removeFromLeft (chanW));
+        meters[m][1].setBounds (cells.removeFromRight (chanW));
     }
 
-    // The scale spans exactly the bars.
+    // The scale spans exactly the cells.
     scaleColumn = scaleColumn.withY (meters[0][0].getY()).withHeight (meters[0][0].getHeight());
 }
 
 void MeterBridge::paint (juce::Graphics& g)
 {
-    using theme::colour;
     const auto s = uiScale;
 
-    g.fillAll (colour (theme::panelArgb));
-    g.setColour (colour (theme::hairlineArgb));
-    g.fillRect (0, 0, 1, getHeight());
+    theme::drawSilk (g, "Levels", levelsLabel.toFloat(), 10.0f * s, colour (C::silk));
+    theme::drawScreen (g, meterScreen.toFloat(), s);
 
-    g.setColour (colour (theme::mutedTextArgb));
-    theme::drawTrackedText (g, "LEVELS", levelsLabel.toFloat(), theme::uiFont (theme::em (0.68f, s)), 0.12f,
-                            juce::Justification::centredLeft);
-
-    // dB scale
-    const auto scaleFont = theme::monoFont (theme::em (0.6f, s));
+    // dB scale (9 px mono)
+    const auto scaleFont = theme::monoFont (9.0f * s);
     g.setFont (scaleFont);
+    g.setColour (colour (C::screenDim));
     const juce::String minus (juce::CharPointer_UTF8 ("\xe2\x88\x92"));
     for (const float db : scaleMarksDb)
     {
         const float p = (db - theme::meterFloorDb) / -theme::meterFloorDb;
         const float y = (float) scaleColumn.getBottom() - p * (float) scaleColumn.getHeight();
-        const auto row = juce::Rectangle<float> ((float) scaleColumn.getX(), y - scaleFont.getHeight() * 0.5f,
-                                                 (float) scaleColumn.getWidth(), scaleFont.getHeight())
-                             .constrainedWithin (getLocalBounds().toFloat());
-        g.setColour (colour (theme::mutedTextArgb));
+        const auto row = juce::Rectangle<float> ((float) scaleColumn.getX() - 6.0f * s, y - scaleFont.getHeight() * 0.5f,
+                                                 (float) scaleColumn.getWidth() + 6.0f * s, scaleFont.getHeight());
         g.drawText (db < 0.0f ? minus + juce::String ((int) -db) : juce::String ("0"), row, juce::Justification::centredRight, false);
     }
 
-    // Meter labels
-    const auto labelFont = theme::uiFont (theme::em (0.72f, s), true);
-    g.setFont (labelFont);
-    for (int m = 0; m < 3; ++m)
+    // Housings: #04080D, inset 0 2px 5px #000, inset 0 0 0 1px #000, 0 1px 0 #ffffff17
+    for (size_t m = 0; m < 3; ++m)
     {
-        g.setColour (colour (labelArgb[(size_t) m]));
-        g.drawText (labelText[m], meterLabels[(size_t) m], juce::Justification::centred, false);
+        const auto h = housings[m].toFloat();
+        const float rad = 3.0f * s;
+        g.setColour (juce::Colour (0x17ffffff));
+        g.fillRoundedRectangle (h.translated (0.0f, 1.0f), rad);
+        g.setColour (colour (C::screen));
+        g.fillRoundedRectangle (h, rad);
+        {
+            juce::Graphics::ScopedSaveState save (g);
+            juce::Path p;
+            p.addRoundedRectangle (h, rad);
+            g.reduceClipRegion (p);
+            g.setGradientFill (juce::ColourGradient (juce::Colours::black, 0.0f, h.getY(),
+                                                     juce::Colours::transparentBlack, 0.0f, h.getY() + 6.0f * s, false));
+            g.fillRect (h.withHeight (6.0f * s));
+        }
+        g.setColour (juce::Colours::black);
+        g.drawRoundedRectangle (h.reduced (0.5f), rad, 1.0f);
+
+        theme::drawSilk (g, labelText[m], meterLabels[m].toFloat(), 10.0f * s, colour (labelColours[m]),
+                         juce::Justification::centred);
     }
 
-    // Live Null Depth
-    const auto box = nullBox.toFloat();
-    g.setColour (colour (theme::groundArgb));
-    g.fillRoundedRectangle (box, 6.0f * s);
-    g.setColour (colour (theme::hairlineArgb));
-    g.drawRoundedRectangle (box.reduced (0.5f), 6.0f * s, 1.0f);
+    // Held peak of each bus (9 px mono)
+    g.setFont (theme::monoFont (9.0f * s));
+    g.setColour (colour (C::screenDim));
+    for (size_t m = 0; m < 3; ++m)
+        g.drawText (readouts[m], readoutRows[m], juce::Justification::centredTop, false);
 
-    auto inner = box.reduced (10.0f * s, 8.0f * s);
-    const auto capFont = theme::uiFont (theme::em (0.64f, s));
-    g.setColour (colour (theme::mutedTextArgb));
-    theme::drawTrackedText (g, "LIVE NULL DEPTH", inner.removeFromTop (capFont.getHeight()), capFont, 0.1f,
-                            juce::Justification::centredLeft);
-    inner.removeFromTop (2.0f * s);
-    g.setColour (colour (theme::residualArgb));
-    g.setFont (theme::monoFont (theme::em (1.25f, s), true));
-    g.drawText (liveNull, inner, juce::Justification::centredLeft, true);
-
-    // Peak readouts, one under each meter
-    g.setFont (theme::monoFont (theme::em (0.64f, s)));
-    g.setColour (colour (theme::buttonTextArgb));
-    for (int m = 0; m < 3; ++m)
+    // NULL DEPTH screen
     {
-        const auto& lab = meterLabels[(size_t) m];
-        g.drawText (readouts[(size_t) m], juce::Rectangle<int> (lab.getX() - 4, readoutRow.getY(), lab.getWidth() + 8, readoutRow.getHeight()),
-                    juce::Justification::centred, false);
+        const auto box = nullBox.toFloat();
+        theme::drawScreen (g, box, s);
+        auto inner = box.reduced (12.0f * s, 10.0f * s);
+        theme::drawSilk (g, "Null depth", inner.removeFromTop (13.0f * s), 10.0f * s, colour (C::silkDim));
+        inner.removeFromTop (2.0f * s);
+
+        juce::String value = liveNull, unit;
+        if (value.endsWith (" dB"))
+        {
+            unit = " dB";
+            value = value.dropLastCharacters (3);
+        }
+        const auto big = theme::monoFont (24.0f * s, true);
+        const auto small = theme::monoFont (13.0f * s);
+        juce::AttributedString text;
+        text.append (value, big, colour (C::nullDepth));
+        text.append (unit, small, colour (C::muted));
+        text.setWordWrap (juce::AttributedString::none);
+        text.setJustification (juce::Justification::bottomLeft);
+        text.draw (g, inner);
+    }
+}
+
+void MeterBridge::paintOverChildren (juce::Graphics& g)
+{
+    // The glass sheen over each housing
+    const auto s = uiScale;
+    for (const auto& housing : housings)
+    {
+        const auto h = housing.toFloat();
+        juce::Graphics::ScopedSaveState save (g);
+        juce::Path p;
+        p.addRoundedRectangle (h, 3.0f * s);
+        g.reduceClipRegion (p);
+
+        juce::ColourGradient across (juce::Colour (0x14ffffff), h.getX(), 0.0f, juce::Colour (0x40000000), h.getRight(), 0.0f, false);
+        across.addColour (0.3, juce::Colour (0x05ffffff));
+        across.addColour (0.5, juce::Colour (0x00ffffff));
+        g.setGradientFill (across);
+        g.fillRect (h);
+
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0x12ffffff), 0.0f, h.getY(),
+                                                 juce::Colour (0x00ffffff), 0.0f, h.getY() + h.getHeight() * 0.12f, false));
+        g.fillRect (h.withHeight (h.getHeight() * 0.12f));
     }
 }
 

@@ -8,13 +8,15 @@
 #include <memory>
 
 #include "app/AppSettings.h"
+#include "app/ui/Widgets.h"
 
 namespace stemab
 {
 
 /** The Preferences content: a section list on the left (Folders, Interface, Audio, Session) and the chosen
     section on the right. Reads and writes AppSettings directly; the interface size goes through
-    Callbacks::setScaleIndex so the header's A- / A+ and this page stay one setting.
+    Callbacks::setScaleIndex so the header's A- / A+ and this page stay one setting, and the colour palette
+    through Callbacks::setPalette (MainComponent saves it and repaints everything).
 
     Every font and metric follows setUiScale() (the same interface scale as the main window). */
 class PreferencesPanel final : public juce::Component
@@ -26,6 +28,7 @@ public:
     {
         std::function<juce::File (AppSettings::Folder)> builtInFolder;   // the default when none is chosen
         std::function<void (int)> setScaleIndex;                         // index into theme::scaleSteps
+        std::function<void (AppSettings::Palette)> setPalette;
     };
 
     PreferencesPanel (AppSettings&, juce::AudioDeviceManager&, Callbacks);
@@ -33,6 +36,9 @@ public:
 
     void setUiScale (float);
     void setScaleIndex (int);       // reflect a change made elsewhere (header, keyboard)
+    void setPalette (AppSettings::Palette);
+    /** The palette changed: re-read the colours. */
+    void refreshPalette();
     void showSection (Section);
 
     /** The panel's size at a given interface scale. */
@@ -45,7 +51,7 @@ private:
     struct FolderRow
     {
         juce::Label caption, path, hint;
-        juce::TextButton browse, reset;
+        HwButton browse, reset;
     };
 
     void refreshFolders();
@@ -59,7 +65,7 @@ private:
     float uiScale = 1.0f;
     Section section = Section::folders;
 
-    std::array<juce::TextButton, 4> navButtons;
+    std::array<HwButton, 4> navButtons;
 
     // Folders
     juce::Component foldersPage;
@@ -71,7 +77,9 @@ private:
     // Interface
     juce::Component interfacePage;
     juce::Label sizeCaption, sizeNote;
-    std::array<juce::TextButton, 4> sizeButtons;
+    std::array<HwButton, 4> sizeButtons;
+    juce::Label paletteCaption, paletteNote;
+    std::array<HwButton, 2> paletteButtons;
 
     // Audio
     juce::Component audioPage;
@@ -94,6 +102,8 @@ public:
 
     PreferencesPanel& getPanel() noexcept       { return panel; }
     void setUiScale (float);
+    /** The palette changed: re-read the colours. */
+    void refreshPalette();
 
     /** Called after the window hides itself (close button or Escape). */
     std::function<void()> onClosed;

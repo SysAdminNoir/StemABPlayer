@@ -17,6 +17,9 @@ namespace
     constexpr float navWidth = 176.0f;
     constexpr int navGroupId = 0x5e01;
     constexpr int sizeGroupId = 0x5e02;
+    constexpr int paletteGroupId = 0x5e03;
+
+    using theme::C;
 
     const char* sectionName (PreferencesPanel::Section s)
     {
@@ -35,7 +38,7 @@ namespace
         switch (s)
         {
             case PreferencesPanel::Section::folders:   return "Where the Open dialogs start";
-            case PreferencesPanel::Section::interface: return "Text and control size";
+            case PreferencesPanel::Section::interface: return "Text and control size, colours";
             case PreferencesPanel::Section::audio:     return "Output device, sample rate and buffer size";
             case PreferencesPanel::Section::session:   return "What comes back when the app starts";
         }
@@ -44,9 +47,21 @@ namespace
 
     void styleNote (juce::Label& l)
     {
-        l.setColour (juce::Label::textColourId, theme::colour (theme::mutedTextArgb));
+        l.setColour (juce::Label::textColourId, theme::colour (C::muted));
         l.setJustificationType (juce::Justification::topLeft);
         l.setMinimumHorizontalScale (1.0f);
+    }
+
+    /** A silkscreen caption (the text is already in capitals). */
+    void styleCaption (juce::Label& l)
+    {
+        l.setColour (juce::Label::textColourId, theme::colour (C::silk));
+    }
+
+    /** Keys that light (no glow) when they are the chosen one. */
+    void styleChoiceKey (HwButton& b)
+    {
+        b.setLitColours (C::colourB, C::inkDark, false);
     }
 }
 
@@ -63,7 +78,8 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
         b.setButtonText (sectionName ((Section) i));
         b.setRadioGroupId (navGroupId);
         b.setClickingTogglesState (true);
-        b.getProperties().set ("fontRatio", 0.40);
+        styleChoiceKey (b);
+        b.setFontPx (13.0f);
         b.onClick = [this, i] { showSection ((Section) i); };
         addAndMakeVisible (b);
     }
@@ -74,11 +90,11 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
     {
         auto& row = rowFor (f);
         row.caption.setText (f == AppSettings::Folder::originals ? "ORIGINALS (A)" : "STEM FILES (B)", juce::dontSendNotification);
-        row.caption.setColour (juce::Label::textColourId, theme::colour (theme::mutedTextArgb));
+        styleCaption (row.caption);
 
-        row.path.setColour (juce::Label::backgroundColourId, theme::colour (theme::raisedArgb));
-        row.path.setColour (juce::Label::outlineColourId, theme::colour (theme::hairline2Argb));
-        row.path.setColour (juce::Label::textColourId, theme::colour (theme::textArgb));
+        row.path.setColour (juce::Label::backgroundColourId, theme::colour (C::screen));
+        row.path.setColour (juce::Label::outlineColourId, theme::colour (C::screenLine));
+        row.path.setColour (juce::Label::textColourId, theme::colour (C::screenText));
         row.path.setMinimumHorizontalScale (1.0f);
 
         styleNote (row.hint);
@@ -117,7 +133,7 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
 
     // Interface
     sizeCaption.setText ("INTERFACE SIZE", juce::dontSendNotification);
-    sizeCaption.setColour (juce::Label::textColourId, theme::colour (theme::mutedTextArgb));
+    styleCaption (sizeCaption);
     interfacePage.addAndMakeVisible (sizeCaption);
 
     for (int i = 0; i < (int) sizeButtons.size(); ++i)
@@ -125,7 +141,8 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
         auto& b = sizeButtons[(size_t) i];
         b.setButtonText (juce::String (juce::roundToInt (theme::scaleSteps[(size_t) i] * 100.0f)) + "%");
         b.setRadioGroupId (sizeGroupId);
-        b.getProperties().set ("fontRatio", 0.40);
+        styleChoiceKey (b);
+        b.setFontPx (13.0f);
         b.onClick = [this, i]
         {
             if (callbacks.setScaleIndex)
@@ -139,6 +156,38 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
                       juce::dontSendNotification);
     styleNote (sizeNote);
     interfacePage.addAndMakeVisible (sizeNote);
+
+    paletteCaption.setText ("COLOUR PALETTE", juce::dontSendNotification);
+    styleCaption (paletteCaption);
+    interfacePage.addAndMakeVisible (paletteCaption);
+
+    const AppSettings::Palette palettes[2] { AppSettings::Palette::standard, AppSettings::Palette::colourBlindSafe };
+    paletteButtons[0].setButtonText ("Standard");
+    paletteButtons[1].setButtonText (juce::String (juce::CharPointer_UTF8 ("Colour-blind safe (red\xe2\x80\x93green)")));
+    paletteButtons[0].setTooltip ("The standard colours: green / amber / red meters and pads");
+    paletteButtons[1].setTooltip ("Colours told apart without red-green vision: blue / yellow / vermilion meters, "
+                                  "Okabe-Ito stem colours");
+    for (int i = 0; i < (int) paletteButtons.size(); ++i)
+    {
+        auto& b = paletteButtons[(size_t) i];
+        b.setRadioGroupId (paletteGroupId);
+        styleChoiceKey (b);
+        b.setFontPx (13.0f);
+        const auto palette = palettes[i];
+        b.onClick = [this, palette]
+        {
+            setPalette (palette);
+            if (callbacks.setPalette)
+                callbacks.setPalette (palette);
+        };
+        interfacePage.addAndMakeVisible (b);
+    }
+
+    paletteNote.setText ("Colour-blind safe replaces the red / green pairs (meters, Play, Mute, the Residual and the "
+                         "stem colours) with hues that stay distinct for protanopia and deuteranopia. "
+                         "It applies at once to the main window and here.", juce::dontSendNotification);
+    styleNote (paletteNote);
+    interfacePage.addAndMakeVisible (paletteNote);
     addChildComponent (interfacePage);
 
     // Audio: JUCE's selector, outputs only (stereo pairs), as the old Audio settings dialog.
@@ -171,11 +220,12 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
 
     settingsFileNote.setText ("Settings file:  " + settings.getFile().getFullPathName(), juce::dontSendNotification);
     styleNote (settingsFileNote);
-    settingsFileNote.setColour (juce::Label::textColourId, theme::colour (theme::mutedTextArgb).withMultipliedAlpha (0.8f));
+    settingsFileNote.setColour (juce::Label::textColourId, theme::colour (C::muted).withMultipliedAlpha (0.8f));
     sessionPage.addAndMakeVisible (settingsFileNote);
     addChildComponent (sessionPage);
 
     refreshFolders();
+    setPalette (settings.getColourPalette());
     showSection (Section::folders);
     setUiScale (1.0f);
 }
@@ -191,8 +241,15 @@ void PreferencesPanel::setUiScale (float s)
 {
     uiScale = s;
 
-    const auto captionFont = theme::uiFont (theme::em (0.72f, s), true).withExtraKerningFactor (0.1f);
+    const auto captionFont = theme::silkFont (11.0f * s).withExtraKerningFactor (0.08f);
     const auto noteFont = theme::uiFont (theme::em (0.86f, s));
+
+    for (auto& b : navButtons)
+        b.setUiScale (s);
+    for (auto& b : sizeButtons)
+        b.setUiScale (s);
+    for (auto& b : paletteButtons)
+        b.setUiScale (s);
 
     for (auto& row : folderRows)
     {
@@ -201,10 +258,13 @@ void PreferencesPanel::setUiScale (float s)
         row.path.setBorderSize ({ 0, theme::scaled (10.0f, s), 0, theme::scaled (10.0f, s) });
         row.hint.setFont (theme::uiFont (theme::em (0.8f, s)));
         row.hint.setBorderSize ({ 0, 0, 0, 0 });
+        row.browse.setUiScale (s);
+        row.reset.setUiScale (s);
     }
     sizeCaption.setFont (captionFont);
+    paletteCaption.setFont (captionFont);
 
-    for (auto* l : { &foldersNote, &sizeNote, &sessionNote })
+    for (auto* l : { &foldersNote, &sizeNote, &paletteNote, &sessionNote })
     {
         l->setFont (noteFont);
         l->setBorderSize ({ 0, 0, 0, 0 });
@@ -227,6 +287,19 @@ void PreferencesPanel::setScaleIndex (int index)
 {
     for (int i = 0; i < (int) sizeButtons.size(); ++i)
         sizeButtons[(size_t) i].setToggleState (i == index, juce::dontSendNotification);
+}
+
+void PreferencesPanel::setPalette (AppSettings::Palette palette)
+{
+    paletteButtons[0].setToggleState (palette == AppSettings::Palette::standard, juce::dontSendNotification);
+    paletteButtons[1].setToggleState (palette == AppSettings::Palette::colourBlindSafe, juce::dontSendNotification);
+}
+
+void PreferencesPanel::refreshPalette()
+{
+    refreshFolders();       // the hint colours
+    sendLookAndFeelChange();
+    repaint();
 }
 
 void PreferencesPanel::showSection (Section s)
@@ -260,7 +333,7 @@ void PreferencesPanel::refreshFolders()
         {
             row.path.setText (builtIn.getFullPathName(), juce::dontSendNotification);
             row.hint.setText ("Default", juce::dontSendNotification);
-            row.hint.setColour (juce::Label::textColourId, theme::colour (theme::mutedTextArgb));
+            row.hint.setColour (juce::Label::textColourId, theme::colour (C::muted));
             row.reset.setEnabled (false);
         }
         else if (! chosen.isDirectory())
@@ -268,7 +341,7 @@ void PreferencesPanel::refreshFolders()
             row.path.setText (chosen.getFullPathName(), juce::dontSendNotification);
             row.hint.setText ("Folder not found " + middleDot + " the dialog opens in the default: " + builtIn.getFullPathName(),
                               juce::dontSendNotification);
-            row.hint.setColour (juce::Label::textColourId, theme::colour (theme::amberArgb));
+            row.hint.setColour (juce::Label::textColourId, theme::colour (C::amber));
             row.reset.setEnabled (true);
         }
         else
@@ -276,7 +349,7 @@ void PreferencesPanel::refreshFolders()
             row.path.setText (chosen.getFullPathName(), juce::dontSendNotification);
             row.hint.setText ("Chosen folder " + middleDot + " Reset returns to " + builtIn.getFullPathName(),
                               juce::dontSendNotification);
-            row.hint.setColour (juce::Label::textColourId, theme::colour (theme::mutedTextArgb));
+            row.hint.setColour (juce::Label::textColourId, theme::colour (C::muted));
             row.reset.setEnabled (true);
         }
         row.path.setTooltip (row.path.getText());
@@ -317,27 +390,28 @@ juce::Rectangle<int> PreferencesPanel::contentArea() const
 void PreferencesPanel::paint (juce::Graphics& g)
 {
     const float s = uiScale;
-    g.fillAll (theme::colour (theme::groundArgb));
+    g.fillAll (theme::colour (C::ground));
 
-    // Section list column
+    // Section list column: a raised panel with a dark edge
     const auto nav = getLocalBounds().removeFromLeft (theme::scaled (navWidth, s));
-    g.setColour (theme::colour (theme::panelArgb));
-    g.fillRect (nav);
-    g.setColour (theme::colour (theme::hairlineArgb));
+    theme::drawPanel (g, nav.toFloat(), s, C::panel, 0.0f, true);
+    g.setColour (theme::colour (C::panelEdge));
     g.fillRect (nav.getRight() - 1, 0, 1, getHeight());
 
     // Section title + subtitle
     auto header = contentArea().removeFromTop (theme::scaled (52.0f, s));
-    g.setColour (theme::colour (theme::textArgb));
+    g.setColour (theme::colour (C::text));
     g.setFont (theme::uiFont (theme::em (1.25f, s), true));
     g.drawText (sectionName (section), header.removeFromTop (theme::scaled (28.0f, s)), juce::Justification::centredLeft, false);
-    g.setColour (theme::colour (theme::mutedTextArgb));
+    g.setColour (theme::colour (C::muted));
     g.setFont (theme::uiFont (theme::em (0.86f, s)));
     g.drawText (sectionSubtitle (section), header.removeFromTop (theme::scaled (20.0f, s)), juce::Justification::centredLeft, false);
 
-    g.setColour (theme::colour (theme::hairlineArgb));
     const auto c = contentArea();
+    g.setColour (theme::colour (C::panelEdge));
     g.fillRect (c.getX(), c.getY() + theme::scaled (60.0f, s), c.getWidth(), 1);
+    g.setColour (theme::colour (C::panelHi).withAlpha (0.5f));
+    g.fillRect (c.getX(), c.getY() + theme::scaled (60.0f, s) + 1, c.getWidth(), 1);
 }
 
 void PreferencesPanel::resized()
@@ -395,7 +469,20 @@ void PreferencesPanel::resized()
             line.removeFromLeft (px (6.0f));
         }
         r.removeFromTop (px (16.0f));
-        sizeNote.setBounds (r.removeFromTop (px (60.0f)));
+        sizeNote.setBounds (r.removeFromTop (px (44.0f)));
+
+        r.removeFromTop (px (20.0f));
+        paletteCaption.setBounds (r.removeFromTop (px (18.0f)));
+        r.removeFromTop (px (8.0f));
+        line = r.removeFromTop (px (34.0f));
+        const int widths[2] { px (120.0f), px (250.0f) };
+        for (size_t i = 0; i < paletteButtons.size(); ++i)
+        {
+            paletteButtons[i].setBounds (line.removeFromLeft (widths[i]));
+            line.removeFromLeft (px (6.0f));
+        }
+        r.removeFromTop (px (16.0f));
+        paletteNote.setBounds (r.removeFromTop (px (60.0f)));
     }
 
     // Audio
@@ -413,7 +500,7 @@ void PreferencesPanel::resized()
 
 //==============================================================================
 PreferencesWindow::PreferencesWindow (AppSettings& settings, juce::AudioDeviceManager& dm, PreferencesPanel::Callbacks cb)
-    : juce::DocumentWindow ("Preferences", theme::colour (theme::groundArgb), juce::DocumentWindow::closeButton),
+    : juce::DocumentWindow ("Preferences", theme::colour (C::ground), juce::DocumentWindow::closeButton),
       panel (settings, dm, std::move (cb))
 {
     setUsingNativeTitleBar (true);
@@ -442,6 +529,12 @@ void PreferencesWindow::visibilityChanged()
 void PreferencesWindow::setUiScale (float s)
 {
     panel.setUiScale (s);
+}
+
+void PreferencesWindow::refreshPalette()
+{
+    setBackgroundColour (theme::colour (C::ground));
+    panel.refreshPalette();
 }
 
 void PreferencesWindow::closeButtonPressed()
