@@ -1,7 +1,9 @@
-// StemAB_Probe - headless Alignment + Track Null Depth report for Original / Stem File pairs.
+// StemAB_Probe - headless Alignment + Track Null Depth report for Original / Stem File pairs,
+// and a Stem File -> separate WAVs exporter (test material for Stem Sets).
 //
 //   StemAB_Probe <original> <stemfile>     one pair
 //   StemAB_Probe                           the three test pairs in "Audio Files/" and "Stem Files/"
+//   StemAB_Probe --export-stems <stemfile> <outdir> [16|24|32]
 
 #include <algorithm>
 #include <chrono>
@@ -12,6 +14,7 @@
 #include <vector>
 
 #include <juce_dsp/juce_dsp.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 
 #include <condition_variable>
 #include <cstring>
@@ -389,11 +392,72 @@ namespace
                      "(identical 16th-order Butterworth): %.2f dB   (%.2f s)\n", lp, secondsSince (t0));
         return true;
     }
+    // Writes a Stem File's four Stems as separate WAVs (Demucs-style names: drums.wav, bass.wav, other.wav,
+    // vocals.wav) into outDir - test material for Stem Sets. In-process decode, no resampling, no gain.
+    bool exportStems (const juce::File& stemFile, const juce::File& outDir, int bits)
+    {
+        std::printf ("Exporting %s\n", stemFile.getFileName().toRawUTF8());
+        const auto decoded = stemab::decodeStemFile (stemFile);
+        if (! decoded.ok)
+        {
+            std::printf ("  FAILED: %s\n", decoded.error.toRawUTF8());
+            return false;
+        }
+
+        if (! outDir.createDirectory())
+        {
+            std::printf ("  FAILED: cannot create %s\n", outDir.getFullPathName().toRawUTF8());
+            return false;
+        }
+
+        const char* names[] = { "drums", "bass", "other", "vocals" };
+        juce::WavAudioFormat wav;
+
+        for (size_t i = 0; i < decoded.stems.size(); ++i)
+        {
+            const auto& buffer = decoded.stems[i];
+            const auto file = outDir.getChildFile (juce::String (names[i]) + ".wav");
+            file.deleteFile();
+
+            std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> writer;
+            if (stream != nullptr)
+                writer.reset (wav.createWriterFor (stream.get(), decoded.sampleRate, (unsigned int) buffer.getNumChannels(),
+                                                   bits, {}, 0));
+            if (writer == nullptr)
+            {
+                std::printf ("  FAILED: cannot write %s\n", file.getFullPathName().toRawUTF8());
+                return false;
+            }
+            stream.release();   // the writer owns it now
+
+            if (! writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples()))
+            {
+                std::printf ("  FAILED: write error on %s\n", file.getFullPathName().toRawUTF8());
+                return false;
+            }
+            std::printf ("  %s  (%d-bit, %.0f Hz, %d ch, %s samples)\n", file.getFullPathName().toRawUTF8(), bits,
+                         decoded.sampleRate, buffer.getNumChannels(), grouped (buffer.getNumSamples()).c_str());
+        }
+        return true;
+    }
 } // namespace
 
 int main (int argc, char* argv[])
 {
     std::printf ("StemAB_Probe - %s\n", stemab::ffmpegVersionString().c_str());
+
+    // StemAB_Probe --export-stems <stemfile> <outdir> [bits=24]
+    if (argc >= 4 && std::strcmp (argv[1], "--export-stems") == 0)
+    {
+        const int bits = argc >= 5 ? std::atoi (argv[4]) : 24;
+        if (bits != 16 && bits != 24 && bits != 32)
+        {
+            std::printf ("bits must be 16, 24 or 32\n");
+            return 2;
+        }
+        return exportStems (juce::File (juce::String::fromUTF8 (argv[2])), juce::File (juce::String::fromUTF8 (argv[3])), bits) ? 0 : 1;
+    }
 
     if (argc == 3)
         return runPair (juce::File (juce::String::fromUTF8 (argv[1])), juce::File (juce::String::fromUTF8 (argv[2]))) ? 0 : 1;
@@ -401,6 +465,7 @@ int main (int argc, char* argv[])
     if (argc != 1)
     {
         std::printf ("usage: StemAB_Probe <original> <stemfile>\n"
+                     "       StemAB_Probe --export-stems <stemfile> <outdir> [16|24|32]   (WAVs for Stem Set tests)\n"
                      "       StemAB_Probe              (runs the three test pairs from the repo folders)\n");
         return 2;
     }

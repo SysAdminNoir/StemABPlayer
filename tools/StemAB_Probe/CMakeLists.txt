@@ -8,7 +8,8 @@ target_link_libraries(StemAB_Probe PRIVATE
     StemAB_Engine
     StemAB_Load
     StemAB_Analysis
-    StemAB_JuceModules)
+    StemAB_JuceModules
+    juce::juce_audio_formats)   # WavAudioFormat, for --export-stems
 
 # With no arguments the probe runs the three test pairs from "Audio Files/" and "Stem Files/" here.
 target_compile_definitions(StemAB_Probe PRIVATE STEMAB_REPO_DIR="${PROJECT_SOURCE_DIR}")
