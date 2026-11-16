@@ -102,5 +102,4 @@ src/app        JUCE application: main window, Preferences, settings, theme
 tests          Catch2 unit tests
 tools          StemAB_Probe (headless analysis / stem export), icon generator
 resources      Bundled fonts and the app icon
-dotnet-legacy  The earlier WinUI/.NET prototype, kept for reference
 ```

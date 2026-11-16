@@ -38,4 +38,4 @@ First complete version of the C++/JUCE rebuild.
   as separate WAVs.
 
 ### Before 0.1.0
-- 2026-10: WinUI 3 / .NET prototype (kept in `dotnet-legacy/`).
+- 2026-10: a WinUI 3 / .NET prototype, since removed from the repository.

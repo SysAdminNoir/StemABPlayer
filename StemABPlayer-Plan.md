@@ -1,8 +1,8 @@
 # Plan: Stem A/B Player — C++ / JUCE rebuild
 
 Vocabulary is defined in [CONTEXT.md](CONTEXT.md); decisions and their reasons in [docs/adr/](docs/adr/).
-The previous WinUI 3 / .NET implementation (commits `e7a2ba9..3baea66`, moved to `dotnet-legacy/` during the
-rebuild) is a reference for intent only (ADR 0001).
+The previous WinUI 3 / .NET implementation was a reference for intent only (ADR 0001); it has since been
+removed from the repository and its history.
 
 ## What this is
 A native Windows desktop tool for critical listening that judges **stem-separation quality**. Load an
@@ -92,7 +92,7 @@ Vocals─► mute/solo gain ─┘     └─► Residual = A − (all 4 Stems) 
 5. **UI to the mockup.** Lanes (peak pyramid, 3-band A), ruler/playhead/loop drag + `I`/`O`, transport bar,
    crossfader + R, keyboard map, persistence.
 6. **Spectrogram.** STFT cache + size chooser, computed in the background, cached per size.
-7. **Clean-up.** Delete `dotnet-legacy/` and `_diag/`; update this plan and the handoff docs.
+7. **Clean-up.** Delete `dotnet-legacy/` (done 2026-11-16, also purged from history) and `_diag/`; update this plan and the handoff docs.
 
 ## Working method
 Orchestrator plans, reviews and commits. Implementation is delegated to Sonnet 5.5 high-effort subagents,
