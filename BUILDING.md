@@ -7,7 +7,7 @@
   Windows SDK, CMake and vcpkg)
 - CMake 3.25 or newer (the copy bundled with VS 2022 is fine)
 - Git (JUCE and Catch2 are fetched with `FetchContent`; FFmpeg is built by vcpkg)
-- Optional: Steinberg ASIO SDK (see below)
+- Optional: Steinberg ASIO SDK (see below, and the full guide in [docs/BUILDING-ASIO.md](docs/BUILDING-ASIO.md))
 
 ## vcpkg
 
@@ -42,8 +42,10 @@ ASIO is optional. Point `STEMAB_ASIO_SDK_DIR` at the unpacked Steinberg SDK (the
 cmake --preset vs2022 -DSTEMAB_ASIO_SDK_DIR=D:/SDKs/asiosdk
 ```
 
-If the header is not found, configure prints a warning and the app builds WASAPI-only. The status line
-at the top of the app shows the available device types (and `[built without ASIO]`).
+If the header is not found, configure prints a warning and the app builds WASAPI-only. In the app,
+Preferences → Audio lists **ASIO** as a device type only when it is built in.
+
+Step-by-step instructions, licensing and troubleshooting: [docs/BUILDING-ASIO.md](docs/BUILDING-ASIO.md).
 
 ## Where things come from
 
@@ -66,7 +68,7 @@ $out = "dist\StemABPlayer-0.1.0"
 New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item "build\vs2022\src\app\StemAB_App_artefacts\Release\*" $out   # Stem AB Player.exe + avcodec/avformat/avutil DLLs
 Copy-Item README.md, CHANGELOG.md, THIRD-PARTY-NOTICES.md $out
-Copy-Item docs\USER-GUIDE.md, resources\fonts\OFL-*.txt $out
+Copy-Item docs\USER-GUIDE.md, docs\BUILDING-ASIO.md, resources\fonts\OFL-*.txt $out
 Compress-Archive "$out\*" "dist\StemABPlayer-0.1.0-win64.zip" -Force
 ```
 

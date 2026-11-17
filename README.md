@@ -79,6 +79,7 @@ ctest --preset release
 |---|---|
 | [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | How to use every part of the app |
 | [BUILDING.md](BUILDING.md) | Building, testing and packaging a release |
+| [docs/BUILDING-ASIO.md](docs/BUILDING-ASIO.md) | Building with ASIO support (Steinberg SDK) |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
 | [CONTEXT.md](CONTEXT.md) | Glossary of the terms used in the app and the code |
 | [docs/adr/](docs/adr/) | Architecture decision records |
