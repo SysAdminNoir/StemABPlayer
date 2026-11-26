@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 — 2026-11-26
+
+### Added
+- **Stem vs Stem:** Open A also accepts a Stem File or Stem Set, so two separations can be compared. It adds four
+  Stem A lanes with their own Mute / Solo, an optional **LINK M/S** between the two sides, and a Residual of
+  all Stem A − all Stem B. Alignment runs on the summed Stem A.
+- **Sample-rate mismatch prompt:** when A and B differ, choose to resample A, resample B, or cancel.
+- **Type a time to seek:** click the time readout and enter `m:ss.mmm`, seconds, `h:mm:ss`, or a `+` / `-`
+  offset from the playhead.
+- **Preferences → About:** version, license, source link, and third-party credits.
+
+### Fixed
+- The alignment cache stores the sample rate each offset was measured at, and converts it on reuse. Before,
+  a different resample choice delivered a misaligned B followed by a spurious "alignment corrected" notice.
+
 ## 0.1.0 — 2026-11-15
 
 First complete version of the C++/JUCE rebuild.

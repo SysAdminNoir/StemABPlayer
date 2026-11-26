@@ -64,12 +64,12 @@ A release is the Release build of the app plus the FFmpeg DLLs vcpkg copied next
 ```powershell
 cmake --build --preset release
 ctest --preset release
-$out = "dist\StemABPlayer-0.1.0"
+$out = "dist\StemABPlayer-0.2.0"
 New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item "build\vs2022\src\app\StemAB_App_artefacts\Release\*" $out   # Stem AB Player.exe + avcodec/avformat/avutil DLLs
-Copy-Item README.md, CHANGELOG.md, THIRD-PARTY-NOTICES.md $out
+Copy-Item README.md, CHANGELOG.md, THIRD-PARTY-NOTICES.md, LICENSE $out
 Copy-Item docs\USER-GUIDE.md, docs\BUILDING-ASIO.md, resources\fonts\OFL-*.txt $out
-Compress-Archive "$out\*" "dist\StemABPlayer-0.1.0-win64.zip" -Force
+Compress-Archive "$out\*" "dist\StemABPlayer-0.2.0-win64.zip" -Force
 ```
 
 `dist/` is ignored by git. The fonts and app icon are compiled into the exe; nothing else is needed at run

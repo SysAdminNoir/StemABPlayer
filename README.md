@@ -29,7 +29,7 @@ original.
 ## Quick start
 
 1. **Open A** — pick the original track (FLAC, WAV, AIFF, MP3, AAC/M4A, ALAC, Ogg, Opus, WMA, APE, WavPack,
-   DSD, …).
+   DSD, …). To compare two separations, pick a Stem File or Stem Set here as well (Stem vs Stem).
 2. **Open B** — pick a `.stem.m4a`, *or* select 1–4 stem files at once (Ctrl/Shift-click).
 3. Press **Space** to play. **A**, **B** and **C** jump the Crossfade to all-A, all-B and center; **R**
    toggles the Residual.

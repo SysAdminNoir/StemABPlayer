@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 # vcpkg: configure with the "vs2022" preset (sets CMAKE_TOOLCHAIN_FILE from $VCPKG_ROOT). See BUILDING.md.
-project(StemABPlayer VERSION 0.1.0 LANGUAGES C CXX)
+project(StemABPlayer VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

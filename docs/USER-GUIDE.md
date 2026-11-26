@@ -48,6 +48,19 @@ Rules for a Stem Set:
 
 The B file box shows a short label for the set; hover it to see which file went to which stem.
 
+### Stem vs Stem (A as stems)
+
+**Open A** also accepts a Stem File or a Stem Set, using the same rules as B. Use it to compare two
+separations of the same song, such as two separators or two model versions. A then shows four **Stem A** lanes
+with their own M / S pads. The Residual becomes *all Stem A − all Stem B*, and alignment runs on the summed
+Stem A. The **LINK M/S** pad makes Mute and Solo on one side mirror the other.
+
+### Different sample rates
+
+If A and B have different sample rates, the app asks which side to resample: **Resample A**, **Resample B**,
+or **Cancel**. Resampling uses the same linear-phase converter as playback. The cached alignment remembers
+the rate it was measured at, so switching the choice later does not misalign B.
+
 ### Previews and loading
 
 As soon as you pick *one* file its waveform appears (a preview), even before the other side is chosen. When
@@ -75,7 +88,9 @@ such as the crossfade are kept).
 | **Master** knob | One gain for everything heard, at most 0 dB. Double-click resets to 0 dB. |
 | **Clip** | Lights when the output exceeds 0 dBFS. Click to reset; lower Master to fix it. |
 
-**Seeking:** click or drag in any waveform lane, while playing or paused.
+**Seeking:** click or drag in any waveform lane, while playing or paused. You can also click the time readout
+(bottom left) and type a time: `1:23.456`, `83.5` or `1:02:03`. A leading `+` or `-` jumps relative to
+the playhead, such as `+5` or `-2.5`. Enter seeks, and Escape cancels.
 
 ### Mute and Solo
 
@@ -129,6 +144,7 @@ Large time (m:ss.mmm), with the current **Sample** and the **Total** length in s
 | **Interface** | Interface size (90 / 100 / 115 / 130 %, same as A− / A+); **Color palette**: Standard or Color-blind safe (red–green). |
 | **Audio** | Output device type (WASAPI, ASIO if built in), device, sample rate, buffer size. |
 | **Session** | Reopen the last pair on launch, paused where you left it, with the same mix settings. |
+| **About** | Version, license (AGPL-3.0), a link to the source code, and third-party credits. |
 
 The **Color-blind safe** palette swaps every red/green pair (meters, Play, Mute, the Residual and the stem
 colors) for blue / yellow / vermillion hues that stay distinct with protanopia and deuteranopia. It applies
