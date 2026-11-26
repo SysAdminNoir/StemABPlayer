@@ -18,6 +18,9 @@ namespace stemab
 /** The stages of loading a pair, in the order the listener can use them. */
 enum class LoadStage { original, stems, alignment, trackNullDepth };
 
+/** User choice when Side A and Side B have different sample rates. */
+enum class RateMismatchChoice { resampleA, resampleB, cancel };
+
 /** Loads an Original / Stem File pair so that it is usable as early as possible, in stages:
 
       1. decodeOriginal and decodeStemFile start at once, on two worker threads (the Stems themselves
@@ -58,7 +61,8 @@ public:
     //==============================================================================
     struct OriginalReady
     {
-        std::shared_ptr<const Session> session;   // Original only
+        std::shared_ptr<const Session> session;   // Original only, or Stem A only
+        bool isStemsA = false;                    // true when Side A is a Stem bundle (Model A vs Model B)
         bool sameOriginal = false;                // reused the previous pair's A buffer (no decode)
         double secondsSinceLoad = 0.0;            // time to A playable
         double decodeSeconds = 0.0;               // 0 when reused
@@ -68,6 +72,7 @@ public:
     struct StemsReady
     {
         std::shared_ptr<const Session> session;   // with Stems; shares OriginalReady's A
+        bool isStemVsStem = false;                // true when Side A is also a Stem bundle
         AlignmentResult alignment;                // when fromCache: offset/polarity/confidence from the cache, no windows
         bool fromCache = false;
         double secondsSinceLoad = 0.0;            // time to B ready
@@ -99,6 +104,9 @@ public:
     /** Also sent (with the same generation rule) after a correction, for the corrected offset. */
     std::function<void (const TrackNullDepth&)> onTrackNullDepth;
     std::function<void (LoadStage, const juce::String& message)> onFailed;
+    /** Optional: called on the owner thread when Side A and Side B have different sample rates.
+        Call `reply` with the chosen action; if unset, Side B is resampled to match Side A automatically. */
+    std::function<void (double rateA, double rateB, std::function<void (RateMismatchChoice)> reply)> onRateMismatch;
 
     //==============================================================================
     /** `cache` may be null (no caching); it must outlive the loader. */
@@ -108,6 +116,9 @@ public:
     /** Starts loading a pair: cancels any load in progress (its results are never delivered). Returns the
         new generation. `stems`: a Stem File (a juce::File converts) or a Stem Set. */
     int load (const juce::File& original, const StemSource& stems);
+
+    /** Starts loading a Stem A vs. Stem B pair (Model comparison mode). */
+    int loadStemsPair (const StemSource& stemsA, const StemSource& stemsB);
 
     /** Cancels the load in progress without starting another. */
     void cancel();
@@ -128,7 +139,7 @@ private:
     void startOriginal (std::shared_ptr<Job>);
     void startStems (std::shared_ptr<Job>);
     void maybeRunStemsStage (const std::shared_ptr<Job>&);
-    void runStemsStage (const std::shared_ptr<Job>&);
+    void runStemsStage (const std::shared_ptr<Job>&, std::optional<RateMismatchChoice> forcedRateChoice = std::nullopt);
     void deliver (int generation, Task task);
     void addJob (Task task);
 

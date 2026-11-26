@@ -22,16 +22,28 @@ LiveNullDepth measureLiveNullDepth (const Session& session, juce::int64 centreSa
 
     double energyA = 0.0, energyR = 0.0;
 
+    const bool hasOrig = session.hasOriginal();
+    const bool hasStemsA = session.hasStemsA();
+    if (! hasOrig && ! hasStemsA)
+        return result;
+
     for (int ch = 0; ch < 2; ++ch)
     {
-        const float* a = session.originalChannel (ch) + s0;
+        const float* a = hasOrig ? session.originalChannel (ch) + s0 : nullptr;
+        const float* stA[Session::numStems] {};
+        if (hasStemsA)
+            for (int k = 0; k < Session::numStems; ++k)
+                stA[k] = session.stemAChannel (k, ch) + s0;
+
         const float* st[Session::numStems];
         for (int k = 0; k < Session::numStems; ++k)
             st[k] = session.stemChannel (k, ch) + s0;
 
         for (int i = 0; i < n; ++i)
         {
-            const double x = a[i];
+            const double x = hasOrig
+                                 ? (double) a[i]
+                                 : ((double) stA[0][i] + (double) stA[1][i] + (double) stA[2][i] + (double) stA[3][i]);
             const double r = x - ((double) st[0][i] + (double) st[1][i] + (double) st[2][i] + (double) st[3][i]);
             energyA += x * x;
             energyR += r * r;

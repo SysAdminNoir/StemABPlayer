@@ -1,6 +1,7 @@
 #include "load/PairLoader.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -17,9 +18,10 @@ namespace
     bool sameRate (double a, double b) noexcept     { return std::abs (a - b) < 0.5; }
     juce::String hz (double rate)                   { return juce::String (rate, 0) + " Hz"; }
 
-    CachedAlignment toCached (const AlignmentResult& r)
+    /** `measuredRate` is the sample rate the offset was measured at (the session rate). */
+    CachedAlignment toCached (const AlignmentResult& r, double measuredRate)
     {
-        return { r.offsetSamples, r.polarity, r.confidence, r.lowConfidence };
+        return { r.offsetSamples, r.polarity, r.confidence, r.lowConfidence, measuredRate };
     }
 
     AlignmentResult fromCached (const CachedAlignment& c)
@@ -32,6 +34,29 @@ namespace
         r.lowConfidence = c.lowConfidence;
         return r;
     }
+
+    juce::AudioBuffer<float> sumStemsToStereo (const StemBuffers& stems)
+    {
+        int maxSamples = 0;
+        for (const auto& s : stems)
+            maxSamples = juce::jmax (maxSamples, s.getNumSamples());
+
+        juce::AudioBuffer<float> sum (2, maxSamples);
+        sum.clear();
+
+        for (const auto& s : stems)
+        {
+            const int n = s.getNumSamples();
+            const int chs = s.getNumChannels();
+            if (n <= 0 || chs <= 0)
+                continue;
+
+            for (int ch = 0; ch < 2; ++ch)
+                sum.addFrom (ch, 0, s, juce::jmin (ch, chs - 1), 0, n);
+        }
+
+        return sum;
+    }
 }
 
 //==============================================================================
@@ -39,7 +64,9 @@ namespace
 struct PairLoader::Job
 {
     int generation = 0;
+    bool isStemsA = false;
     juce::File originalFile;
+    StemSource stemSourceA;
     StemSource stemSource;
     FileIdentity originalId, stemId;
     std::optional<CachedAlignment> cached;
@@ -47,8 +74,8 @@ struct PairLoader::Job
     CancelCheck cancel;
 
     std::mutex mutex;
-    std::shared_ptr<const Session> original;      // Original only: decoded or reused
-    std::shared_ptr<StemBuffers> stems;           // as decoded
+    std::shared_ptr<const Session> original;      // Original only or Stem A only: decoded or reused
+    std::shared_ptr<StemBuffers> stems;           // Side B as decoded
     double stemsRate = 0.0;
     double stemsDecodeSeconds = 0.0;
     juce::StringArray stemsNotes;
@@ -156,9 +183,50 @@ int PairLoader::load (const juce::File& originalFile, const StemSource& stems)
 
         OriginalReady ev;
         ev.session = job->original;
+        ev.isStemsA = job->original->hasStemsA();
         ev.sameOriginal = true;
         ev.secondsSinceLoad = secondsSince (job->startMs);
         ev.notes.add ("Original unchanged: reused without decoding");
+
+        deliver (gen, [this, ev] { if (onOriginalReady) onOriginalReady (ev); });
+    }
+    else
+    {
+        startOriginal (job);
+    }
+
+    startStems (job);
+    return gen;
+}
+
+int PairLoader::loadStemsPair (const StemSource& stemsA, const StemSource& stemsB)
+{
+    const int gen = ++ownerGeneration;
+    generation.store (gen);
+
+    auto job = std::make_shared<Job>();
+    job->generation = gen;
+    job->isStemsA = true;
+    job->stemSourceA = stemsA;
+    job->stemSource = stemsB;
+    job->originalId = FileIdentity::of (stemsA);
+    job->stemId = FileIdentity::of (stemsB);
+    job->startMs = nowMs();
+    job->cancel = [this, gen] { return generation.load (std::memory_order_relaxed) != gen; };
+
+    if (cache != nullptr)
+        job->cached = cache->find (job->originalId, job->stemId);
+
+    if (lastOriginalSession != nullptr && job->originalId.isValid() && job->originalId == lastOriginalIdentity)
+    {
+        job->original = Session::originalOnlyOf (*lastOriginalSession);
+
+        OriginalReady ev;
+        ev.session = job->original;
+        ev.isStemsA = true;
+        ev.sameOriginal = true;
+        ev.secondsSinceLoad = secondsSince (job->startMs);
+        ev.notes.add ("Stem A unchanged: reused without decoding");
 
         deliver (gen, [this, ev] { if (onOriginalReady) onOriginalReady (ev); });
     }
@@ -179,30 +247,59 @@ void PairLoader::startOriginal (std::shared_ptr<Job> job)
     addJob ([this, job]
     {
         const double t = nowMs();
-        auto decoded = backend.decodeOriginal (job->originalFile, DecodeOptions { job->cancel, true });
+        const DecodeOptions options { job->cancel, true };
+        std::shared_ptr<const Session> session;
+        juce::StringArray notes;
 
-        if (isCancelled (job->cancel))
-            return;
-
-        if (! decoded.ok)
+        if (job->isStemsA)
         {
-            deliver (job->generation, [this, e = decoded.error] { if (onFailed) onFailed (LoadStage::original, "Original: " + e); });
-            return;
-        }
+            const bool isSet = job->stemSourceA.isSet();
+            auto decoded = isSet ? backend.decodeStemSet (job->stemSourceA.setFiles, options)
+                                 : backend.decodeStems (job->stemSourceA.stemFile, options);
 
-        auto session = Session::createOriginalOnly (std::move (decoded.audio), decoded.sampleRate);
+            if (isCancelled (job->cancel))
+                return;
+
+            if (! decoded.ok)
+            {
+                const juce::String what = isSet ? "Stem A files: " : "Stem A file: ";
+                deliver (job->generation, [this, e = what + decoded.error] { if (onFailed) onFailed (LoadStage::original, e); });
+                return;
+            }
+
+            auto bufPtr = std::make_shared<const StemBuffers> (std::move (decoded.stems));
+            session = Session::createStemsAOnly (bufPtr, decoded.sampleRate);
+            notes = std::move (decoded.notes);
+        }
+        else
+        {
+            auto decoded = backend.decodeOriginal (job->originalFile, options);
+
+            if (isCancelled (job->cancel))
+                return;
+
+            if (! decoded.ok)
+            {
+                deliver (job->generation, [this, e = decoded.error] { if (onFailed) onFailed (LoadStage::original, "Original: " + e); });
+                return;
+            }
+
+            session = Session::createOriginalOnly (std::move (decoded.audio), decoded.sampleRate);
+            notes = std::move (decoded.notes);
+        }
 
         if (session == nullptr)
         {
-            deliver (job->generation, [this] { if (onFailed) onFailed (LoadStage::original, "Original: invalid sample rate"); });
+            deliver (job->generation, [this] { if (onFailed) onFailed (LoadStage::original, "Side A: invalid sample rate"); });
             return;
         }
 
         OriginalReady ev;
         ev.session = session;
+        ev.isStemsA = job->isStemsA;
         ev.decodeSeconds = secondsSince (t);
         ev.secondsSinceLoad = secondsSince (job->startMs);
-        ev.notes = decoded.notes;
+        ev.notes = notes;
 
         // Posted before the hand-over below, so onOriginalReady always precedes onStemsReady.
         deliver (job->generation, [this, ev, id = job->originalId]
@@ -269,38 +366,122 @@ void PairLoader::maybeRunStemsStage (const std::shared_ptr<Job>& job)
         runStemsStage (job);
 }
 
-void PairLoader::runStemsStage (const std::shared_ptr<Job>& job)
+void PairLoader::runStemsStage (const std::shared_ptr<Job>& job, std::optional<RateMismatchChoice> forcedRateChoice)
 {
     const int gen = job->generation;
     const auto& cancel = job->cancel;
-    const auto base = job->original;
+    auto base = job->original;
     auto stems = job->stems;
     juce::StringArray notes = job->stemsNotes;
 
     if (isCancelled (cancel))
         return;
 
-    const double rate = base->sampleRate();
+    double rate = base->sampleRate();
+    const double nativeRateA = rate;    // before any resampleA swap; legacy cache entries were measured at this rate
 
     if (! sameRate (job->stemsRate, rate))
     {
-        for (auto& s : *stems)
+        if (! forcedRateChoice.has_value() && onRateMismatch)
         {
-            s = resample (s, job->stemsRate, rate);
-            if (isCancelled (cancel))
-                return;
+            const double rateA = rate;
+            const double rateB = job->stemsRate;
+            deliver (gen, [this, job, gen, rateA, rateB]
+            {
+                if (! onRateMismatch)
+                {
+                    addJob ([this, job] { runStemsStage (job, RateMismatchChoice::resampleB); });
+                    return;
+                }
+
+                onRateMismatch (rateA, rateB, [this, job, gen] (RateMismatchChoice choice)
+                {
+                    if (ownerGeneration != gen)
+                        return;
+
+                    if (choice == RateMismatchChoice::cancel)
+                    {
+                        this->cancel();
+                        if (onFailed)
+                            onFailed (LoadStage::stems, "Cancelled (sample rate mismatch).");
+                        return;
+                    }
+
+                    addJob ([this, job, choice] { runStemsStage (job, choice); });
+                });
+            });
+            return;
         }
 
-        notes.add ("Stems resampled " + hz (job->stemsRate) + " -> " + hz (rate) + " to match the Original");
+        const auto choice = forcedRateChoice.value_or (RateMismatchChoice::resampleB);
+
+        if (choice == RateMismatchChoice::resampleA)
+        {
+            const double targetRate = job->stemsRate;
+
+            if (base->hasOriginal())
+            {
+                auto resampledOrig = resample (base->original(), rate, targetRate);
+                if (isCancelled (cancel))
+                    return;
+                base = Session::createOriginalOnly (std::move (resampledOrig), targetRate);
+            }
+            else if (base->hasStemsA())
+            {
+                StemBuffers resampledA;
+                const auto& srcA = *base->decodedStemsA();
+                for (size_t k = 0; k < (size_t) Session::numStems; ++k)
+                {
+                    resampledA[k] = resample (srcA[k], rate, targetRate);
+                    if (isCancelled (cancel))
+                        return;
+                }
+                base = Session::createStemsAOnly (std::make_shared<const StemBuffers> (std::move (resampledA)), targetRate);
+            }
+
+            {
+                const std::lock_guard lock (job->mutex);
+                job->original = base;
+            }
+
+            notes.add ("Side A resampled " + hz (rate) + " -> " + hz (targetRate) + " to match Side B");
+            rate = targetRate;
+
+            OriginalReady origEv;
+            origEv.session = base;
+            origEv.isStemsA = job->isStemsA;
+            origEv.secondsSinceLoad = secondsSince (job->startMs);
+            origEv.notes = notes;
+            deliver (gen, [this, origEv]
+            {
+                lastOriginalSession = origEv.session;
+                if (onOriginalReady) onOriginalReady (origEv);
+            });
+        }
+        else
+        {
+            for (auto& s : *stems)
+            {
+                s = resample (s, job->stemsRate, rate);
+                if (isCancelled (cancel))
+                    return;
+            }
+
+            notes.add ("Side B resampled " + hz (job->stemsRate) + " -> " + hz (rate) + " to match Side A");
+        }
     }
 
     const std::shared_ptr<const StemBuffers> constStems = stems;
-    const auto& original = base->original();
+    const juce::AudioBuffer<float> summedA = base->hasOriginal()
+                                                 ? juce::AudioBuffer<float>()
+                                                 : sumStemsToStereo (*base->decodedStemsA());
+    const juce::AudioBuffer<float>& original = base->hasOriginal() ? base->original() : summedA;
 
     const auto deliverStems = [&] (const AlignmentResult& al, bool fromCache, double alignSeconds)
     {
         StemsReady ev;
         ev.session = Session::withStems (*base, constStems, al.offsetSamples, al.polarity);
+        ev.isStemVsStem = job->isStemsA;
         ev.alignment = al;
         ev.fromCache = fromCache;
         ev.decodeSeconds = job->stemsDecodeSeconds;
@@ -315,7 +496,17 @@ void PairLoader::runStemsStage (const std::shared_ptr<Job>& job)
     if (job->cached.has_value())
     {
         // Cache hit: B is ready right now with the cached offset; measure anyway and correct if it moved.
-        finalAlignment = fromCached (*job->cached);
+        // A cached offset is in samples at the rate it was measured at; bring it to the session rate.
+        auto cachedAtRate = *job->cached;
+        const double cachedRate = cachedAtRate.sampleRate > 0.0 ? cachedAtRate.sampleRate : nativeRateA;
+        const bool converted = ! sameRate (cachedRate, rate);
+
+        if (converted)
+            cachedAtRate.offsetSamples = (juce::int64) std::llround ((double) cachedAtRate.offsetSamples * rate / cachedRate);
+
+        cachedAtRate.sampleRate = rate;
+
+        finalAlignment = fromCached (cachedAtRate);
         deliverStems (finalAlignment, true, 0.0);
 
         const auto measured = measureAlignment (original, *stems, rate, backend.alignmentOptions, cancel);
@@ -325,11 +516,16 @@ void PairLoader::runStemsStage (const std::shared_ptr<Job>& job)
 
         if (measured.ok)
         {
-            if (! toCached (measured).sameAlignment (*job->cached))
+            // Converting between rates rounds, so allow a sample of slack then (never otherwise).
+            const bool same = converted ? (measured.polarity == cachedAtRate.polarity
+                                           && std::abs (measured.offsetSamples - cachedAtRate.offsetSamples) <= 1)
+                                        : toCached (measured, rate).sameAlignment (cachedAtRate);
+
+            if (! same)
             {
                 AlignmentCorrected ev;
                 ev.session = Session::withStems (*base, constStems, measured.offsetSamples, measured.polarity);
-                ev.cached = *job->cached;
+                ev.cached = cachedAtRate;
                 ev.measured = measured;
                 ev.secondsSinceLoad = secondsSince (job->startMs);
                 deliver (gen, [this, ev] { if (onAlignmentCorrected) onAlignmentCorrected (ev); });
@@ -337,7 +533,7 @@ void PairLoader::runStemsStage (const std::shared_ptr<Job>& job)
             }
 
             if (cache != nullptr)
-                cache->store (job->originalId, job->stemId, toCached (measured));
+                cache->store (job->originalId, job->stemId, toCached (measured, rate));
         }
     }
     else
@@ -357,7 +553,7 @@ void PairLoader::runStemsStage (const std::shared_ptr<Job>& job)
         deliverStems (finalAlignment, false, secondsSince (t));
 
         if (cache != nullptr)
-            cache->store (job->originalId, job->stemId, toCached (finalAlignment));
+            cache->store (job->originalId, job->stemId, toCached (finalAlignment, rate));
     }
 
     // Off the critical path: B is already playing.

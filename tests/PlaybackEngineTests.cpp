@@ -1004,3 +1004,68 @@ TEST_CASE ("Session handover: continue from 0 or at the same position, with a fa
         CHECK (e.getPlayheadSample() == 0);
     }
 }
+
+TEST_CASE ("Dual-stem mode: Stem A vs Stem B crossfade, independent Mute/Solo and Residual", "[engine]")
+{
+    const int length = 32768;
+    auto makeStems = [&] (float v0, float v1, float v2, float v3)
+    {
+        StemBuffers b;
+        const std::array<float, 4> vals { v0, v1, v2, v3 };
+        for (size_t k = 0; k < 4; ++k)
+        {
+            b[k].setSize (2, length);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int n = 0; n < length; ++n)
+                    b[k].setSample (ch, n, vals[k]);
+        }
+        return std::make_shared<const StemBuffers> (std::move (b));
+    };
+
+    auto stemsA = makeStems (0.1f, 0.2f, 0.0f, 0.0f);   // sum = 0.3
+    auto stemsB = makeStems (0.05f, 0.10f, 0.0f, 0.0f); // sum = 0.15
+
+    auto base = Session::createStemsAOnly (stemsA, rate);
+    REQUIRE (base != nullptr);
+    REQUIRE (base->hasStemsA());
+    REQUIRE_FALSE (base->hasOriginal());
+    REQUIRE_FALSE (base->hasStems());
+
+    auto full = Session::withStems (*base, stemsB, 0, +1);
+    REQUIRE (full != nullptr);
+    REQUIRE (full->hasStemsA());
+    REQUIRE (full->hasStems());
+
+    PlaybackEngine e;
+    e.prepare (rate, block);
+    e.setSession (full);
+    e.play();
+    render (e, 2048);   // settle transport fade
+
+    CHECK (e.sessionHasStemsA());
+    CHECK (e.sessionHasStems());
+
+    // Crossfade = 0.0 -> all Stem A (0.3)
+    e.setCrossfade (0.0f);
+    render (e, 2048);
+    auto outA = render (e, 512);
+    CHECK_THAT (outA.l.back(), WithinAbs (0.3f, 1e-4f));
+
+    // Mute Stem A Drums (0.1) -> Stem A becomes 0.2, Stem B untouched
+    e.setStemAMuted (0, true);
+    render (e, 2048);
+    auto outAMuted = render (e, 512);
+    CHECK_THAT (outAMuted.l.back(), WithinAbs (0.2f, 1e-4f));
+
+    // Crossfade = 1.0 -> all Stem B (0.15)
+    e.setCrossfade (1.0f);
+    render (e, 2048);
+    auto outB = render (e, 512);
+    CHECK_THAT (outB.l.back(), WithinAbs (0.15f, 1e-4f));
+
+    // Residual -> all Stem A (0.3) - all Stem B (0.15) = 0.15 regardless of Mute/Solo
+    e.setListenMode (ListenMode::Residual);
+    render (e, 2048);
+    auto outR = render (e, 512);
+    CHECK_THAT (outR.l.back(), WithinAbs (0.15f, 1e-4f));
+}

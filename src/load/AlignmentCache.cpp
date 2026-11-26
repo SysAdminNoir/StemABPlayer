@@ -158,6 +158,7 @@ void AlignmentCache::loadIfNeeded()
             e.alignment.polarity = (int) v.getProperty ("polarity", 1) < 0 ? -1 : +1;
             e.alignment.confidence = (double) v.getProperty ("confidence", 0.0);
             e.alignment.lowConfidence = (bool) v.getProperty ("lowConfidence", true);
+            e.alignment.sampleRate = (double) v.getProperty ("sampleRate", 0.0);
 
             if (e.original.isValid() && e.stemFile.isValid())
                 entries.push_back (std::move (e));
@@ -178,6 +179,7 @@ void AlignmentCache::save()
         o->setProperty ("polarity", e.alignment.polarity);
         o->setProperty ("confidence", e.alignment.confidence);
         o->setProperty ("lowConfidence", e.alignment.lowConfidence);
+        o->setProperty ("sampleRate", e.alignment.sampleRate);
         list.add (juce::var (o));
     }
 

@@ -34,6 +34,7 @@ public:
     /** The chosen files (empty = none): the screens show their names (a Stem Set its short label), their
         tooltips the full paths (a Stem Set's one per line). */
     void setFiles (const juce::File& original, const StemSource& stems);
+    void setFiles (const juce::File& original, const StemSource& stemsA, const StemSource& stemsB);
     juce::String getTooltip() override;
     void setStatus (const juce::Array<Segment>& left, const juce::Array<Segment>& right);
     void setScaleLabel (const juce::String&);
@@ -53,7 +54,7 @@ private:
                          const juce::String& name, const juce::String& emptyText) const;
 
     juce::File originalFile;
-    StemSource stemSource;
+    StemSource stemSourceA, stemSource;
     juce::String originalName, stemFileName, scaleLabel { "100%" };
     juce::Array<Segment> leftStatus, rightStatus;
     juce::String statusKey;

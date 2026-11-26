@@ -34,10 +34,11 @@ enum class Handover
       StemSum  - B after Mute/Solo, before the Crossfade;
       Output   - what is written to the device (after Crossfade, Master Gain and, when the device does not run
                  at the source rate, after the realtime resampler - ADR 0005);
-      Drums..Vocals - each Stem after its Mute/Solo gain.
+      Drums..Vocals  - each Side B Stem after its Mute/Solo gain;
+      DrumsA..VocalsA - each Side A Stem after its Mute/Solo gain.
     All taps but Output are measured at the source rate, before the resampler. */
-enum class MeterTap : int { Original = 0, StemSum, Output, Drums, Bass, Other, Vocals };
-inline constexpr int numMeterTaps = 7;
+enum class MeterTap : int { Original = 0, StemSum, Output, Drums, Bass, Other, Vocals, DrumsA, BassA, OtherA, VocalsA };
+inline constexpr int numMeterTaps = 11;
 
 struct MeterReading
 {
@@ -136,6 +137,8 @@ public:
     void setListenMode (ListenMode mode) noexcept;  // Residual ignores the Crossfade and Mute/Solo
     void setStemMuted (int stemIndex, bool muted) noexcept;
     void setStemSoloed (int stemIndex, bool soloed) noexcept;
+    void setStemAMuted (int stemIndex, bool muted) noexcept;
+    void setStemASoloed (int stemIndex, bool soloed) noexcept;
     /** One plain scalar for everything heard. Clamped to <= 0 dB; <= masterGainFloorDb (or -inf) is silence. */
     void setMasterGainDb (double gainDb) noexcept;
 
@@ -144,6 +147,8 @@ public:
     ListenMode getListenMode() const noexcept   { return (ListenMode) listenMode.load (std::memory_order_relaxed); }
     bool isStemMuted (int i) const noexcept;
     bool isStemSoloed (int i) const noexcept;
+    bool isStemAMuted (int i) const noexcept;
+    bool isStemASoloed (int i) const noexcept;
     double getMasterGainDb() const noexcept     { return masterGainDb.load (std::memory_order_relaxed); }
 
     /** The Mute/Solo rule (CONTEXT.md): any Stem soloed -> the soloed set; otherwise the un-muted set. */
@@ -165,8 +170,10 @@ public:
     /** Of the session the audio thread is playing (0 if none yet). */
     juce::int64 getSessionLength() const noexcept   { return sessionLength.load (std::memory_order_relaxed); }
     double getSessionSampleRate() const noexcept    { return sessionRate.load (std::memory_order_relaxed); }
-    /** True if the session the audio thread is playing has its Stems (B and the Residual are audible). */
+    /** True if the session the audio thread is playing has Side B Stems (B and the Residual are audible). */
     bool sessionHasStems() const noexcept           { return sessionStems.load (std::memory_order_relaxed); }
+    /** True if the session the audio thread is playing has Side A as Stems (Model A vs Model B mode). */
+    bool sessionHasStemsA() const noexcept          { return sessionStemsA.load (std::memory_order_relaxed); }
     /** The rate passed to the last prepare(). */
     double getDeviceSampleRate() const noexcept     { return deviceRatePublished.load (std::memory_order_relaxed); }
     /** True while the mix goes through the realtime output resampler (device rate != mix rate). */
@@ -223,6 +230,7 @@ private:
     std::atomic<int> curve { (int) Curve::EqualPower };
     std::atomic<int> listenMode { (int) ListenMode::AB };
     std::array<std::atomic<bool>, Session::numStems> muted {}, soloed {};
+    std::array<std::atomic<bool>, Session::numStems> mutedA {}, soloedA {};
     std::atomic<double> masterGainDb { 0.0 };
     std::atomic<float> masterGainLinear { 1.0f };
 
@@ -235,6 +243,7 @@ private:
     std::atomic<juce::int64> sessionLength { 0 };
     std::atomic<double> sessionRate { 0.0 };
     std::atomic<bool> sessionStems { false };
+    std::atomic<bool> sessionStemsA { false };
     std::atomic<double> deviceRatePublished { 44100.0 };
     std::atomic<int> maxBlockPublished { 512 };
     std::atomic<double> mixRatePublished { 44100.0 };
@@ -289,6 +298,7 @@ private:
     using Smoothed = juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>;
     Smoothed gainA, gainB, gainR, gainMaster;
     std::array<Smoothed, Session::numStems> gainStem;
+    std::array<Smoothed, Session::numStems> gainStemA;
     Smoothed gainStemsPresent;              // 0 without Stems; ramps to 1 when an upgrade brings them (B and R only)
 
     // per-block meter accumulators

@@ -23,7 +23,7 @@ HeaderBar::HeaderBar()
     scaleDownButton.setButtonText (juce::String (juce::CharPointer_UTF8 ("A\xe2\x88\x92")));
     scaleUpButton.setButtonText ("A+");
 
-    openOriginalButton.setTooltip ("Open the Original (A): the mastered track");
+    openOriginalButton.setTooltip ("Open A: an Original track, an NI .stem.m4a, or 1 to 4 separate stem files");
     openStemButton.setTooltip ("Open B: an NI .stem.m4a, or 1 to 4 separate stem files (e.g. drums.wav, bass.wav, other.wav, vocals.wav)");
     settingsButton.setTooltip ("Preferences: folders, interface size and colors, audio device, session (Ctrl+,)");
     scaleDownButton.setTooltip ("Smaller interface (Ctrl+-)");
@@ -36,12 +36,18 @@ HeaderBar::HeaderBar()
 
 void HeaderBar::setFiles (const juce::File& original, const StemSource& stems)
 {
-    if (original != originalFile || stems != stemSource)
+    setFiles (original, StemSource(), stems);
+}
+
+void HeaderBar::setFiles (const juce::File& original, const StemSource& stemsA, const StemSource& stemsB)
+{
+    if (original != originalFile || stemsA != stemSourceA || stemsB != stemSource)
     {
         originalFile = original;
-        stemSource = stems;
-        originalName = original.getFileName();
-        stemFileName = stems.displayName();
+        stemSourceA = stemsA;
+        stemSource = stemsB;
+        originalName = stemsA.isEmpty() ? original.getFileName() : stemsA.displayName();
+        stemFileName = stemsB.displayName();
         repaint();
     }
 }
@@ -51,7 +57,7 @@ juce::String HeaderBar::getTooltip()
     // A file screen shows its full path; nothing elsewhere (the status line has no tooltip).
     const auto p = getMouseXYRelative();
     if (chipA.contains (p))
-        return originalFile.getFullPathName();
+        return stemSourceA.isEmpty() ? originalFile.getFullPathName() : stemSourceA.describePaths();
     if (chipB.contains (p))
         return stemSource.describePaths();
     return {};

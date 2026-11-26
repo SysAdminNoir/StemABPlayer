@@ -99,6 +99,7 @@ private:
     static StemSource stemSourceFromChoice (const juce::Array<juce::File>&, juce::String& error);
     /** The lanes and Mute / Solo of Stems without a file (a Stem Set with fewer than four). */
     void applyStemPresence();
+    void applyStemAPresence();
     void startLoadIfReady();
     /** A file chosen in a dialog: its lane(s) start over and its waveform preview starts at once (before the
         pair is complete). Not for the file the loaded pair already uses (the reload reuses that one). */
@@ -116,6 +117,9 @@ private:
     void seekTo (juce::int64 sample);
     void toggleStemSolo (int i);
     void toggleStemMute (int i);
+    void toggleStemASolo (int i);
+    void toggleStemAMute (int i);
+    void showRateMismatchPrompt (double rateA, double rateB, std::function<void (RateMismatchChoice)> reply);
     void setListenAB (float x);
     void toggleResidual();
     void toggleLoop();
@@ -155,9 +159,12 @@ private:
     juce::String initialiseError;
 
     juce::File originalFile;
+    StemSource stemSourceA;                         // A when Side A is a Stem File or Stem Set
     StemSource stemSource;                          // B: a Stem File or a Stem Set
     juce::File pairOriginal;                        // the pair last handed to loader.load()
+    StemSource pairStemsA;
     StemSource pairStems;
+    bool linkMuteSolo = false;
     juce::String openNotice;                        // why the last Open B choice was not used
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<PreferencesWindow> preferences;     // before the device's destruction (the selector listens to it)
@@ -170,6 +177,7 @@ private:
 
     std::shared_ptr<const Session> shownSession;    // what the lanes show (polled from the loader)
     bool originalSummaryReady = false;
+    bool stemASummaryReady = false;
 
     // Previews of a file chosen on its own (FilePreview); the pair's own summaries replace them.
     bool originalPreviewShown = false, stemsPreviewShown = false;

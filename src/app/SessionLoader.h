@@ -20,6 +20,7 @@ enum class StageState { idle, running, done, failed };
 struct LoadStatus
 {
     juce::String originalName, stemFileName;    // stemFileName: a Stem Set's short label (StemSource::displayName)
+    bool isStemVsStem = false;                  // true when Side A is a Stem bundle (Model A vs Model B)
 
     bool busy = false;                  // A or B still on its way
     juce::String progress;              // one-line summary: "Decoding...", "Original playable - Stems...", "Ready"
@@ -74,6 +75,12 @@ public:
     /** Starts loading a pair, replacing the current one once the new Original is decoded. B is a Stem File or
         a Stem Set. */
     void load (const juce::File& original, const StemSource& stems);
+
+    /** Starts loading a Stem A vs. Stem B pair (Model comparison mode). */
+    void loadStemsPair (const StemSource& stemsA, const StemSource& stemsB);
+
+    /** Optional: called on the message thread when Side A and Side B have different sample rates. */
+    std::function<void (double rateA, double rateB, std::function<void (RateMismatchChoice)> reply)> onRateMismatch;
 
     /** Back to the state before any load: the load in progress is cancelled (nothing more is delivered),
         the engine's session is cleared (a playing transport fades out first; the audio thread retires the

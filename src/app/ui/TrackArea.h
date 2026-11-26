@@ -36,8 +36,19 @@ public:
     void setUiScale (float);
     void setTimeline (juce::int64 lengthSamples, double sampleRate);
 
+    /** False = Original vs. Stem B (default); True = Stem A (4 lanes) above Stem B (4 lanes). */
+    void setStemVsStemMode (bool);
+    bool isStemVsStemMode() const noexcept              { return stemVsStemMode; }
+
     void setOriginalSummary (SummaryPtr);
     void setOriginalState (bool rendering);            // a session exists but A's waveform is still being computed
+    void setStemASummaries (const std::array<SummaryPtr, numStems>&);
+    void clearStemASummaries();
+    void setStemAState (StemsState);
+    void setStemsAPresent (const std::array<bool, numStems>&);
+    bool isStemAPresent (int i) const noexcept          { return stemAPresent[(size_t) i]; }
+    void setAudibleStemsA (const std::array<bool, numStems>&);
+
     void setStemSummaries (const std::array<SummaryPtr, numStems>&, SummaryPtr residual);
     void clearStemSummaries();
     void setStemsState (StemsState);
@@ -61,7 +72,9 @@ public:
 
     PlayheadOverlay& getOverlay() noexcept              { return overlay; }
     TrackHeader& getOriginalHeader() noexcept           { return *aHeader; }
+    TrackHeader& getStemAHeader (int i) noexcept        { return *stemAHeaders[(size_t) i]; }
     TrackHeader& getStemHeader (int i) noexcept         { return *stemHeaders[(size_t) i]; }
+    HwButton& getLinkMsButton() noexcept                { return linkMsButton; }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -82,23 +95,27 @@ private:
     void updateStemDimming();
 
     float uiScale = 1.0f;
+    bool stemVsStemMode = false;
     bool residualAmplified = true;
+    StemsState stemsAState = StemsState::noSession;
     StemsState stemsState = StemsState::noSession;
+    std::array<bool, numStems> stemAPresent { true, true, true, true };
     std::array<bool, numStems> stemPresent { true, true, true, true };
     bool originalRendering = false;
 
     juce::Viewport viewport;
     Content content { *this };
 
+    HwButton linkMsButton { HwButton::Kind::pad };
     std::unique_ptr<TrackHeader> aHeader, rHeader;
-    std::array<std::unique_ptr<TrackHeader>, numStems> stemHeaders;
+    std::array<std::unique_ptr<TrackHeader>, numStems> stemAHeaders, stemHeaders;
 
     TimeRuler ruler;
     std::unique_ptr<WaveformLane> aLane, rLane;
-    std::array<std::unique_ptr<WaveformLane>, numStems> stemLanes;
+    std::array<std::unique_ptr<WaveformLane>, numStems> stemALanes, stemLanes;
     PlayheadOverlay overlay;
 
-    juce::Rectangle<int> channelsLabel, groupLabel, screenArea;
+    juce::Rectangle<int> channelsLabel, groupALabel, groupLabel, screenArea;
     juce::Array<int> separatorYs;
 };
 

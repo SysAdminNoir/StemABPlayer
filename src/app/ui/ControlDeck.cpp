@@ -91,6 +91,17 @@ void ControlDeck::setCrossfadeDimmed (bool d)
     repaint (xfLabelRow);
 }
 
+void ControlDeck::setStemVsStemMode (bool m)
+{
+    if (m != stemVsStemMode)
+    {
+        stemVsStemMode = m;
+        crossfadeSlider.setTooltip (m ? "Crossfade between Stem A Sum and Stem B Sum. Double-click: center. Keys A / B / C."
+                                      : "Crossfade between A (Original) and B (Stem Sum). Double-click: center. Keys A / B / C.");
+        repaint (xfLabelRow);
+    }
+}
+
 void ControlDeck::setGainText (const juce::String& s)
 {
     if (s != gainText)
@@ -278,13 +289,15 @@ void ControlDeck::paint (juce::Graphics& g)
             g.drawFittedText (line, block.removeFromTop (lineH).toNearestInt(), juce::Justification::centredRight, 1, 0.8f);
     }
 
-    // Crossfade labels: A · ORIGINAL ... CROSSFADE <readout> ... STEM SUM · B
+    // Crossfade labels: A · ORIGINAL (or A · STEM A) ... CROSSFADE <readout> ... STEM SUM · B (or STEM B · B)
     {
         const float alpha = crossfadeDimmed ? 0.45f : 1.0f;
         const float px = 10.0f * s;
         const auto row = xfLabelRow.toFloat();
-        theme::drawSilk (g, "A " + middleDot + " original", row, px, colour (C::colourA).withMultipliedAlpha (alpha));
-        theme::drawSilk (g, "Stem sum " + middleDot + " B", row, px, colour (C::colourB).withMultipliedAlpha (alpha),
+        theme::drawSilk (g, stemVsStemMode ? ("A " + middleDot + " stem a") : ("A " + middleDot + " original"),
+                         row, px, colour (C::colourA).withMultipliedAlpha (alpha));
+        theme::drawSilk (g, stemVsStemMode ? ("Stem B " + middleDot + " B") : ("Stem sum " + middleDot + " B"),
+                         row, px, colour (C::colourB).withMultipliedAlpha (alpha),
                          juce::Justification::centredRight);
 
         const auto mono = theme::monoFont (10.0f * s);

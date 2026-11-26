@@ -40,6 +40,11 @@ TrackArea::TrackArea()
 
     for (int i = 0; i < numStems; ++i)
     {
+        stemAHeaders[(size_t) i] = std::make_unique<TrackHeader> (TrackHeader::Style {
+            TrackHeader::Kind::stem, theme::stemRole (i), stemName ((Stem) i), true, true, false });
+        stemALanes[(size_t) i] = std::make_unique<WaveformLane> (theme::stemColour (i), WaveformLane::Look::outline);
+        stemALanes[(size_t) i]->setVerticalPadding (6.0f);
+
         stemHeaders[(size_t) i] = std::make_unique<TrackHeader> (TrackHeader::Style {
             TrackHeader::Kind::stem, theme::stemRole (i), stemName ((Stem) i), true, true, false });
 
@@ -47,13 +52,23 @@ TrackArea::TrackArea()
         stemLanes[(size_t) i]->setVerticalPadding (6.0f);
     }
 
+    linkMsButton.setButtonText ("LINK M/S");
+    linkMsButton.setTooltip ("Link Mute and Solo between Stem A and Stem B");
+    linkMsButton.setLitColours (C::colourB, C::inkDark);
+    linkMsButton.setClickingTogglesState (true);
+    content.addChildComponent (linkMsButton);
+
     content.addAndMakeVisible (*aHeader);
+    for (auto& h : stemAHeaders)
+        content.addChildComponent (*h);
     for (auto& h : stemHeaders)
         content.addAndMakeVisible (*h);
     content.addAndMakeVisible (*rHeader);
 
     content.addAndMakeVisible (ruler);
     content.addAndMakeVisible (*aLane);
+    for (auto& l : stemALanes)
+        content.addChildComponent (*l);
     for (auto& l : stemLanes)
         content.addAndMakeVisible (*l);
     content.addAndMakeVisible (*rLane);
@@ -66,6 +81,8 @@ TrackArea::TrackArea()
 
     setOpaque (true);
     updateStemPlaceholders();
+    for (auto& h : stemAHeaders)
+        h->setDimmed (true);
     for (auto& h : stemHeaders)
         h->setDimmed (true);
     rHeader->setDimmed (true);
@@ -74,16 +91,39 @@ TrackArea::TrackArea()
 void TrackArea::setUiScale (float s)
 {
     uiScale = s;
+    linkMsButton.setUiScale (s);
     aHeader->setUiScale (s);
     rHeader->setUiScale (s);
+    for (auto& h : stemAHeaders)
+        h->setUiScale (s);
     for (auto& h : stemHeaders)
         h->setUiScale (s);
     aLane->setUiScale (s);
     rLane->setUiScale (s);
+    for (auto& l : stemALanes)
+        l->setUiScale (s);
     for (auto& l : stemLanes)
         l->setUiScale (s);
     ruler.setUiScale (s);
     overlay.setUiScale (s);
+    resized();
+    repaint();
+}
+
+void TrackArea::setStemVsStemMode (bool m)
+{
+    if (m == stemVsStemMode)
+        return;
+
+    stemVsStemMode = m;
+    aHeader->setVisible (! m);
+    aLane->setVisible (! m);
+    linkMsButton.setVisible (m);
+    for (int i = 0; i < numStems; ++i)
+    {
+        stemAHeaders[(size_t) i]->setVisible (m);
+        stemALanes[(size_t) i]->setVisible (m);
+    }
     resized();
     repaint();
 }
@@ -103,6 +143,47 @@ void TrackArea::setOriginalState (bool rendering)
 {
     originalRendering = rendering;
     aLane->setPlaceholder (rendering ? juce::String (juce::CharPointer_UTF8 ("Rendering waveform\xe2\x80\xa6")) : juce::String());
+}
+
+void TrackArea::setStemASummaries (const std::array<SummaryPtr, numStems>& stems)
+{
+    for (int i = 0; i < numStems; ++i)
+        stemALanes[(size_t) i]->setSummary (stemAPresent[(size_t) i] ? stems[(size_t) i] : nullptr);
+}
+
+void TrackArea::clearStemASummaries()
+{
+    for (auto& l : stemALanes)
+        l->setSummary (nullptr);
+}
+
+void TrackArea::setStemAState (StemsState s)
+{
+    if (s == stemsAState)
+        return;
+    stemsAState = s;
+    updateStemPlaceholders();
+    updateStemDimming();
+}
+
+void TrackArea::setStemsAPresent (const std::array<bool, numStems>& present)
+{
+    if (present == stemAPresent)
+        return;
+
+    stemAPresent = present;
+    for (int i = 0; i < numStems; ++i)
+        if (! stemAPresent[(size_t) i])
+            stemALanes[(size_t) i]->setSummary (nullptr);
+
+    updateStemPlaceholders();
+    updateStemDimming();
+}
+
+void TrackArea::setAudibleStemsA (const std::array<bool, numStems>& audible)
+{
+    for (int i = 0; i < numStems; ++i)
+        stemALanes[(size_t) i]->setFaded (! audible[(size_t) i]);
 }
 
 void TrackArea::setStemSummaries (const std::array<SummaryPtr, numStems>& stems, SummaryPtr residual)
@@ -144,6 +225,10 @@ void TrackArea::setStemsPresent (const std::array<bool, numStems>& present)
 
 void TrackArea::updateStemDimming()
 {
+    const bool dimA = stemsAState != StemsState::ready;
+    for (int i = 0; i < numStems; ++i)
+        stemAHeaders[(size_t) i]->setDimmed (dimA || ! stemAPresent[(size_t) i]);
+
     const bool dim = stemsState != StemsState::ready;
     for (int i = 0; i < numStems; ++i)
         stemHeaders[(size_t) i]->setDimmed (dim || ! stemPresent[(size_t) i]);
@@ -166,10 +251,15 @@ void TrackArea::refreshPalette()
     aLane->setColour (theme::colour (C::colourA));
     rLane->setColour (theme::colour (C::accent));
     for (int i = 0; i < numStems; ++i)
+    {
+        stemALanes[(size_t) i]->setColour (theme::stemColour (i));
         stemLanes[(size_t) i]->setColour (theme::stemColour (i));
+    }
 
     aHeader->repaint();
     rHeader->repaint();
+    for (auto& h : stemAHeaders)
+        h->repaint();
     for (auto& h : stemHeaders)
         h->repaint();
     content.repaint();
@@ -178,6 +268,14 @@ void TrackArea::refreshPalette()
 
 void TrackArea::updateStemPlaceholders()
 {
+    const juce::String textA = stemsAState == StemsState::loading
+                                   ? juce::String (juce::CharPointer_UTF8 ("Loading stems\xe2\x80\xa6"))
+                                   : stemsAState == StemsState::ready || stemsAState == StemsState::preview
+                                         ? juce::String (juce::CharPointer_UTF8 ("Rendering waveform\xe2\x80\xa6"))
+                                         : juce::String();
+    for (int i = 0; i < numStems; ++i)
+        stemALanes[(size_t) i]->setPlaceholder (stemAPresent[(size_t) i] ? textA : juce::String ("No file"));
+
     const juce::String text = stemsState == StemsState::loading
                                   ? juce::String (juce::CharPointer_UTF8 ("Loading stems\xe2\x80\xa6"))
                                   : stemsState == StemsState::ready || stemsState == StemsState::preview
@@ -207,6 +305,13 @@ void TrackArea::setHint (const juce::String& h)
 //==============================================================================
 int TrackArea::laneHeightFor (int viewportHeight) const
 {
+    if (stemVsStemMode)
+    {
+        const float fixed = (rulerPx + 2.0f * groupRowPx + screenBottomPx) * uiScale;
+        const float fill = ((float) viewportHeight - fixed) / (2.0f * (float) numStems + rLaneFactor);
+        return juce::jmax (theme::scaled (minLanePx, uiScale), (int) std::floor (fill));
+    }
+
     const float fixed = (rulerPx + groupRowPx + screenBottomPx) * uiScale;
     const float fill = ((float) viewportHeight - fixed) / (aLaneFactor + (float) numStems + rLaneFactor);
     return juce::jmax (theme::scaled (minLanePx, uiScale), (int) std::floor (fill));
@@ -214,6 +319,10 @@ int TrackArea::laneHeightFor (int viewportHeight) const
 
 int TrackArea::contentHeightFor (int lane) const
 {
+    if (stemVsStemMode)
+        return theme::scaled (rulerPx, uiScale) + 2 * theme::scaled (groupRowPx, uiScale) + theme::scaled (screenBottomPx, uiScale)
+               + 2 * numStems * lane + juce::roundToInt ((float) lane * rLaneFactor);
+
     return theme::scaled (rulerPx, uiScale) + theme::scaled (groupRowPx, uiScale) + theme::scaled (screenBottomPx, uiScale)
            + juce::roundToInt ((float) lane * aLaneFactor) + numStems * lane + juce::roundToInt ((float) lane * rLaneFactor);
 }
@@ -245,6 +354,12 @@ void TrackArea::layoutContent (int width, int lane)
 
     int y = 0;
     channelsLabel = { 0, y, columnW, rulerH };
+    if (stemVsStemMode)
+    {
+        const int linkW = theme::scaled (68.0f, uiScale);
+        const int linkH = theme::scaled (18.0f, uiScale);
+        linkMsButton.setFaceBounds ({ columnW - linkW, y + (rulerH - linkH) / 2, linkW, linkH });
+    }
     ruler.setBounds (screenX, y, screenW, rulerH);
     y += rulerH;
 
@@ -257,8 +372,23 @@ void TrackArea::layoutContent (int width, int lane)
         y += h;
     };
 
-    place (*aHeader, *aLane, aH);
-    separatorYs.add (y - 1);                // A's bottom border
+    if (stemVsStemMode)
+    {
+        groupALabel = { 0, y, columnW, groupH };
+        y += groupH;
+
+        for (int i = 0; i < numStems; ++i)
+        {
+            separatorYs.add (y);
+            place (*stemAHeaders[(size_t) i], *stemALanes[(size_t) i], lane);
+        }
+        separatorYs.add (y - 1);
+    }
+    else
+    {
+        place (*aHeader, *aLane, aH);
+        separatorYs.add (y - 1);            // A's bottom border
+    }
 
     groupLabel = { 0, y, columnW, groupH };
     y += groupH;
@@ -297,14 +427,29 @@ void TrackArea::paintContent (juce::Graphics& g)
     for (const int y : separatorYs)
         g.fillRect (screenArea.getX(), y, screenArea.getWidth(), 1);
 
-    // Channel column labels: "CHANNELS" and the "B STEM SUM" group row
+    // Channel column labels: "CHANNELS" and the group row(s)
     theme::drawSilk (g, "Channels", channelsLabel.toFloat(), 10.0f * s, colour (C::silk));
 
     const float px = 10.0f * s;
-    auto row = groupLabel.toFloat();
-    theme::drawSilk (g, "B", row.removeFromLeft (theme::silkWidth ("B", px) + 1.0f), px, colour (C::colourB));
-    row.removeFromLeft (8.0f * s);
-    theme::drawSilk (g, "Stem sum", row, px, colour (C::silk));
+    if (stemVsStemMode)
+    {
+        auto rowA = groupALabel.toFloat();
+        theme::drawSilk (g, "A", rowA.removeFromLeft (theme::silkWidth ("A", px) + 1.0f), px, colour (C::colourA));
+        rowA.removeFromLeft (8.0f * s);
+        theme::drawSilk (g, "Stem A", rowA, px, colour (C::silk));
+
+        auto rowB = groupLabel.toFloat();
+        theme::drawSilk (g, "B", rowB.removeFromLeft (theme::silkWidth ("B", px) + 1.0f), px, colour (C::colourB));
+        rowB.removeFromLeft (8.0f * s);
+        theme::drawSilk (g, "Stem B", rowB, px, colour (C::silk));
+    }
+    else
+    {
+        auto row = groupLabel.toFloat();
+        theme::drawSilk (g, "B", row.removeFromLeft (theme::silkWidth ("B", px) + 1.0f), px, colour (C::colourB));
+        row.removeFromLeft (8.0f * s);
+        theme::drawSilk (g, "Stem sum", row, px, colour (C::silk));
+    }
 }
 
 } // namespace stemab

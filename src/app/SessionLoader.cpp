@@ -37,6 +37,13 @@ SessionLoader::SessionLoader (juce::AudioDeviceManager& dm, PlaybackEngine& e, P
     pairLoader.onAlignmentCorrected = [this] (const auto& ev) { alignmentCorrected (ev); };
     pairLoader.onTrackNullDepth     = [this] (const auto& ev) { trackNullDepthReady (ev); };
     pairLoader.onFailed             = [this] (LoadStage stage, const juce::String& message) { failed (stage, message); };
+    pairLoader.onRateMismatch       = [this] (double rateA, double rateB, std::function<void (RateMismatchChoice)> reply)
+    {
+        if (onRateMismatch)
+            onRateMismatch (rateA, rateB, std::move (reply));
+        else
+            reply (RateMismatchChoice::resampleB);
+    };
 }
 
 SessionLoader::~SessionLoader() = default;   // the PairLoader cancels and waits for its workers
@@ -69,6 +76,28 @@ void SessionLoader::load (const juce::File& original, const StemSource& stems)
     changed();
 
     pairLoader.load (original, stems);
+}
+
+void SessionLoader::loadStemsPair (const StemSource& stemsA, const StemSource& stemsB)
+{
+    const auto keepRate = status;
+    status = {};
+    status.originalName = stemsA.displayName();
+    status.stemFileName = stemsB.displayName();
+    status.isStemVsStem = true;
+    status.busy = true;
+    status.original = StageState::running;
+    status.stems = StageState::running;
+    status.alignment = StageState::idle;
+    status.trackNullDepth = StageState::idle;
+    status.sourceRate = keepRate.sourceRate;
+    status.deviceRate = keepRate.deviceRate;
+    status.rateState = keepRate.rateState;
+    status.rateNote = keepRate.rateNote;
+    updateProgress();
+    changed();
+
+    pairLoader.loadStemsPair (stemsA, stemsB);
 }
 
 void SessionLoader::unload()
@@ -108,6 +137,7 @@ void SessionLoader::originalReady (const PairLoader::OriginalReady& ev)
     session = ev.session;
 
     status.original = StageState::done;
+    status.isStemVsStem = ev.isStemsA;
     status.originalReused = ev.sameOriginal;
     status.timeToOriginal = ev.secondsSinceLoad;
     status.decodeOriginalSeconds = ev.decodeSeconds;
@@ -154,6 +184,8 @@ void SessionLoader::stemsReady (const PairLoader::StemsReady& ev)
 
     setAlignment (ev.alignment);
     status.alignmentFromCache = ev.fromCache;
+    if (ev.isStemVsStem && status.notice.isEmpty())
+        status.notice = "Stem-to-stem alignment via cross-correlation (approximate)";
     status.stems = StageState::done;
     status.alignment = StageState::done;
     status.trackNullDepth = StageState::running;

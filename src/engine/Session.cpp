@@ -65,7 +65,51 @@ std::shared_ptr<const Session> Session::createOriginalOnly (juce::AudioBuffer<fl
 
     std::shared_ptr<Session> s (new Session());
     s->a = std::make_shared<const juce::AudioBuffer<float>> (toStereoOfLength (std::move (original), length));
+    s->trackLength = length;
     s->rate = sampleRate;
+    return s;
+}
+
+std::shared_ptr<const Session> Session::createStemsAOnly (std::shared_ptr<const StemBuffers> stemsA, double sampleRate)
+{
+    if (stemsA == nullptr || ! (sampleRate > 0.0))
+        return nullptr;
+
+    int length = 0;
+    bool allConform = true;
+    for (const auto& stem : *stemsA)
+        length = juce::jmax (length, stem.getNumSamples());
+
+    for (const auto& stem : *stemsA)
+        if (stem.getNumChannels() != 2 || stem.getNumSamples() != length)
+            allConform = false;
+
+    std::shared_ptr<Session> s (new Session());
+    s->sourceA = stemsA;
+    s->trackLength = length;
+    s->rate = sampleRate;
+
+    if (allConform)
+    {
+        s->storageA = stemsA;
+    }
+    else
+    {
+        StemBuffers normalized;
+        for (size_t k = 0; k < (size_t) numStems; ++k)
+        {
+            juce::AudioBuffer<float> copy ((*stemsA)[k]);
+            normalized[k] = toStereoOfLength (std::move (copy), length);
+        }
+        s->storageA = std::make_shared<const StemBuffers> (std::move (normalized));
+    }
+
+    for (size_t k = 0; k < (size_t) numStems; ++k)
+        for (int ch = 0; ch < 2; ++ch)
+            s->stemAPointers[k][(size_t) ch] = (*s->storageA)[k].getNumSamples() > 0
+                                                   ? (*s->storageA)[k].getReadPointer (ch)
+                                                   : nullptr;
+
     return s;
 }
 
@@ -73,6 +117,10 @@ std::shared_ptr<const Session> Session::originalOnlyOf (const Session& base)
 {
     std::shared_ptr<Session> s (new Session());
     s->a = base.a;
+    s->sourceA = base.sourceA;
+    s->storageA = base.storageA;
+    s->stemAPointers = base.stemAPointers;
+    s->trackLength = base.trackLength;
     s->rate = base.rate;
     return s;
 }
@@ -87,6 +135,10 @@ std::shared_ptr<const Session> Session::withStems (const Session& base,
 
     std::shared_ptr<Session> s (new Session());
     s->a = base.a;
+    s->sourceA = base.sourceA;
+    s->storageA = base.storageA;
+    s->stemAPointers = base.stemAPointers;
+    s->trackLength = base.trackLength;
     s->rate = base.rate;
     s->source = stems;
     s->offset = offsetSamples;

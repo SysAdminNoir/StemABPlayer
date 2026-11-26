@@ -38,14 +38,17 @@ public:
     WaveformBuilder();
     ~WaveformBuilder();
 
-    /** Called on the message thread with the result of the latest buildOriginal() / buildStems(). */
+    /** Called on the message thread with the result of the latest buildOriginal() / buildStemsA() / buildStems(). */
     std::function<void (SummaryPtr)> onOriginalReady;
+    std::function<void (const std::array<SummaryPtr, Session::numStems>&)> onStemsAReady;
     std::function<void (const StemSummaries&)> onStemsReady;
 
     void buildOriginal (std::shared_ptr<const Session>);
+    void buildStemsA (std::shared_ptr<const Session>);
     void buildStems (std::shared_ptr<const Session>);
 
     void cancelOriginal() noexcept      { ++originalGeneration; }
+    void cancelStemsA() noexcept        { ++stemsAGeneration; }
     void cancelStems() noexcept         { ++stemsGeneration; }
 
 private:
@@ -55,7 +58,7 @@ private:
     };
 
     std::shared_ptr<Token> token;
-    std::atomic<juce::uint64> originalGeneration { 0 }, stemsGeneration { 0 };
+    std::atomic<juce::uint64> originalGeneration { 0 }, stemsAGeneration { 0 }, stemsGeneration { 0 };
     std::atomic<bool> shuttingDown { false };
     juce::ThreadPool pool;
 

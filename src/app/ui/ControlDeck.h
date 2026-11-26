@@ -37,6 +37,7 @@ public:
     void setTime (const juce::String& time, const juce::String& samples);
     void setCrossfadeReadout (const juce::String&);
     void setCrossfadeDimmed (bool);
+    void setStemVsStemMode (bool);
     void setGainText (const juce::String&);
     void setUiScale (float);
 
@@ -56,6 +57,7 @@ private:
 
     float uiScale = 1.0f;
     bool crossfadeDimmed = false;
+    bool stemVsStemMode = false;
     juce::String timeText { "0:00.000" }, sampleText, xfReadout, gainText;
 
     juce::Rectangle<int> timeBox, xfLabelRow, masterLabel, clipLabel;

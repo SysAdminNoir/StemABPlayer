@@ -94,6 +94,8 @@ void PlaybackEngine::prepare (double deviceSampleRate, int maximumBlockSize)
         g->setCurrentAndTargetValue (g->getTargetValue());
     for (auto& g : gainStem)
         g.setCurrentAndTargetValue (g.getTargetValue());
+    for (auto& g : gainStemA)
+        g.setCurrentAndTargetValue (g.getTargetValue());
 
     // Rebuild the output path for the new device (no callback runs now, so building and freeing is fine).
     delete resampler;
@@ -269,6 +271,28 @@ bool PlaybackEngine::isStemMuted (int i) const noexcept
 bool PlaybackEngine::isStemSoloed (int i) const noexcept
 {
     return juce::isPositiveAndBelow (i, Session::numStems) && soloed[(size_t) i].load (std::memory_order_relaxed);
+}
+
+void PlaybackEngine::setStemAMuted (int i, bool m) noexcept
+{
+    if (juce::isPositiveAndBelow (i, Session::numStems))
+        mutedA[(size_t) i].store (m, std::memory_order_relaxed);
+}
+
+void PlaybackEngine::setStemASoloed (int i, bool s) noexcept
+{
+    if (juce::isPositiveAndBelow (i, Session::numStems))
+        soloedA[(size_t) i].store (s, std::memory_order_relaxed);
+}
+
+bool PlaybackEngine::isStemAMuted (int i) const noexcept
+{
+    return juce::isPositiveAndBelow (i, Session::numStems) && mutedA[(size_t) i].load (std::memory_order_relaxed);
+}
+
+bool PlaybackEngine::isStemASoloed (int i) const noexcept
+{
+    return juce::isPositiveAndBelow (i, Session::numStems) && soloedA[(size_t) i].load (std::memory_order_relaxed);
 }
 
 void PlaybackEngine::setMasterGainDb (double gainDb) noexcept
@@ -578,6 +602,17 @@ void PlaybackEngine::updateGainTargets() noexcept
     for (size_t i = 0; i < audible.size(); ++i)
         gainStem[i].setTargetValue (audible[i] ? 1.0f : 0.0f);
 
+    std::array<bool, Session::numStems> mA {}, sA {};
+    for (size_t i = 0; i < mA.size(); ++i)
+    {
+        mA[i] = mutedA[i].load (std::memory_order_relaxed);
+        sA[i] = soloedA[i].load (std::memory_order_relaxed);
+    }
+
+    const auto audibleA = audibleStems (mA, sA);
+    for (size_t i = 0; i < audibleA.size(); ++i)
+        gainStemA[i].setTargetValue (audibleA[i] ? 1.0f : 0.0f);
+
     gainMaster.setTargetValue (masterGainLinear.load (std::memory_order_relaxed));
     gainStemsPresent.setTargetValue (hasStems (current) ? 1.0f : 0.0f);
 }
@@ -591,6 +626,7 @@ void PlaybackEngine::publish (int numSamples) noexcept
     sessionLength.store (hasSession ? current->length() : 0, std::memory_order_relaxed);
     sessionRate.store (hasSession ? current->sampleRate() : 0.0, std::memory_order_relaxed);
     sessionStems.store (hasSession && current->hasStems(), std::memory_order_relaxed);
+    sessionStemsA.store (hasSession && current->hasStemsA(), std::memory_order_relaxed);
     mixRatePublished.store (mixRate, std::memory_order_relaxed);
     resamplingFlag.store (resampler != nullptr && ! holdMixer, std::memory_order_relaxed);
     resamplerLatency.store (resampler != nullptr ? resampler->getLatencySeconds() : 0.0, std::memory_order_relaxed);
@@ -632,6 +668,8 @@ void PlaybackEngine::setMixRate (double rate) noexcept
     for (auto* g : { &gainA, &gainB, &gainR, &gainMaster })
         g->reset (mixRate, gainRampSeconds);
     for (auto& g : gainStem)
+        g.reset (mixRate, gainRampSeconds);
+    for (auto& g : gainStemA)
         g.reset (mixRate, gainRampSeconds);
     gainStemsPresent.reset (mixRate, stemsFadeSeconds);
 
@@ -860,15 +898,28 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
             g->skip (numSamples);
         for (auto& g : gainStem)
             g.skip (numSamples);
+        for (auto& g : gainStemA)
+            g.skip (numSamples);
 
         return false;
     }
 
     const Session* s = current;
     const juce::int64 len = s->length();
-    const bool stemsPresent = s->hasStems();   // false: Original only - B and the Residual are silent
-    const float* aL = s->originalChannel (0);
-    const float* aR = s->originalChannel (1);
+    const bool hasOrig = s->hasOriginal();
+    const bool hasStemsA = s->hasStemsA();
+    const bool stemsPresent = s->hasStems();   // false: Side A only - B and the Residual are silent
+    const float* aL = hasOrig ? s->originalChannel (0) : nullptr;
+    const float* aR = hasOrig ? s->originalChannel (1) : nullptr;
+    std::array<const float*, Session::numStems> sAL {}, sAR {};
+    if (hasStemsA)
+    {
+        for (int k = 0; k < Session::numStems; ++k)
+        {
+            sAL[(size_t) k] = s->stemAChannel (k, 0);
+            sAR[(size_t) k] = s->stemAChannel (k, 1);
+        }
+    }
     std::array<const float*, Session::numStems> sL {}, sR {};
     for (int k = 0; k < Session::numStems; ++k)
     {
@@ -877,7 +928,7 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
     }
 
     constexpr size_t tA = (size_t) MeterTap::Original, tB = (size_t) MeterTap::StemSum,
-                     tStem0 = (size_t) MeterTap::Drums;
+                     tStem0 = (size_t) MeterTap::Drums, tStemA0 = (size_t) MeterTap::DrumsA;
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -886,9 +937,12 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
         const float gr = gainR.getNextValue();
         const float gm = gainMaster.getNextValue();
         const float gp = gainStemsPresent.getNextValue();
-        std::array<float, Session::numStems> gs {};
+        std::array<float, Session::numStems> gs {}, gsA {};
         for (size_t k = 0; k < gs.size(); ++k)
+        {
             gs[k] = gainStem[k].getNextValue() * gp;   // exact when gp == 1 (the steady state)
+            gsA[k] = gainStemA[k].getNextValue();
+        }
 
         if (! running || current != s)
             continue;   // paused or swapped earlier in this piece: the rest stays silent (the new session
@@ -946,22 +1000,40 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
         const float env = fadePos >= fadeLen ? 1.0f : fadeShape ((float) fadePos / (float) fadeLen);
 
         // Read (zeros past the buffer - never read beyond it).
-        float a[2] = { 0.0f, 0.0f };
-        float b[2] = { 0.0f, 0.0f };      // audible Stems (Mute/Solo)
-        float all[2] = { 0.0f, 0.0f };    // all four Stems, for the Residual
-        std::array<std::array<float, 2>, Session::numStems> stemOut {};
+        float a[2] = { 0.0f, 0.0f };      // audible Side A (Original or audible Stem A)
+        float allA[2] = { 0.0f, 0.0f };   // full Side A (Original or all four Stem A), for the Residual
+        float b[2] = { 0.0f, 0.0f };      // audible Side B Stems (Mute/Solo)
+        float all[2] = { 0.0f, 0.0f };    // all four Side B Stems, for the Residual
+        std::array<std::array<float, 2>, Session::numStems> stemAOut {}, stemOut {};
 
         if (pos >= 0 && pos < len)
         {
             const auto n = (size_t) pos;
-            a[0] = aL[n];
-            a[1] = aR[n];
+            if (hasOrig)
+            {
+                a[0] = allA[0] = aL[n];
+                a[1] = allA[1] = aR[n];
+            }
+            else if (hasStemsA)
+            {
+                for (size_t k = 0; k < (size_t) Session::numStems; ++k)
+                {
+                    const float l = sAL[k] != nullptr ? sAL[k][n] : 0.0f;
+                    const float r = sAR[k] != nullptr ? sAR[k][n] : 0.0f;
+                    allA[0] += l;
+                    allA[1] += r;
+                    stemAOut[k] = { gsA[k] * l, gsA[k] * r };
+                    a[0] += stemAOut[k][0];
+                    a[1] += stemAOut[k][1];
+                }
+            }
 
             if (stemsPresent)
             {
                 for (size_t k = 0; k < (size_t) Session::numStems; ++k)
                 {
-                    const float l = sL[k][n], r = sR[k][n];
+                    const float l = sL[k] != nullptr ? sL[k][n] : 0.0f;
+                    const float r = sR[k] != nullptr ? sR[k][n] : 0.0f;
                     all[0] += l;
                     all[1] += r;
                     stemOut[k] = { gs[k] * l, gs[k] * r };
@@ -977,7 +1049,7 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
         float y[2];
         for (size_t c = 0; c < 2; ++c)
         {
-            const float residual = stemsPresent ? a[c] - all[c] : 0.0f;
+            const float residual = (stemsPresent && (hasOrig || hasStemsA)) ? allA[c] - all[c] : 0.0f;
             y[c] = (ga * a[c] + gb * b[c] + grp * residual) * gm * env;
 
             const float ya = a[c] * env, yb = b[c] * env;
@@ -991,6 +1063,10 @@ bool PlaybackEngine::renderMix (float* left, float* right, int numSamples) noexc
                 const float ys = stemOut[k][c] * env;
                 blockPeak[tStem0 + k][c] = juce::jmax (blockPeak[tStem0 + k][c], std::abs (ys));
                 blockSumSq[tStem0 + k][c] += (double) ys * ys;
+
+                const float ysA = stemAOut[k][c] * env;
+                blockPeak[tStemA0 + k][c] = juce::jmax (blockPeak[tStemA0 + k][c], std::abs (ysA));
+                blockSumSq[tStemA0 + k][c] += (double) ysA * ysA;
             }
         }
 

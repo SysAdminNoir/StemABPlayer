@@ -34,6 +34,7 @@ struct CachedAlignment
     int polarity = +1;
     double confidence = 0.0;
     bool lowConfidence = false;
+    double sampleRate = 0.0;    // the rate offsetSamples was measured at; 0 = unknown (a legacy entry)
 
     bool sameAlignment (const CachedAlignment& o) const noexcept   { return offsetSamples == o.offsetSamples && polarity == o.polarity; }
 };

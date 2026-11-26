@@ -642,3 +642,259 @@ TEST_CASE ("DecodeStash::wrap: the pair load takes a previewed decode instead of
     CHECK (fake.originalDecodes.load() == 2);
     REQUIRE (again.upgraded != nullptr);
 }
+
+TEST_CASE ("PairLoader: loadStemsPair aligns Stem B to Stem A and handles sample-rate mismatch choices", "[load]")
+{
+    TempDir tmp;
+    const auto aFile = tmp.file ("a.stem.m4a", "A");
+    const auto bFile = tmp.file ("b.stem.m4a", "B");
+
+    const auto sig = noise (1 << 17, 77);
+    const auto stemsA = splitAndDelay (sig, 0);
+    const auto stemsB = splitAndDelay (sig, 512);
+
+    SECTION ("Stem A vs Stem B aligns via cross-correlation")
+    {
+        TaskQueue q;
+        PairLoader::Backend be;
+        be.decodeStems = [&] (const juce::File& f, const DecodeOptions&)
+        {
+            DecodedStems d;
+            d.ok = true;
+            d.sampleRate = fs;
+            d.stems = (f == aFile) ? stemsA : stemsB;
+            return d;
+        };
+
+        PairLoader loader (q.poster(), nullptr, be);
+        bool gotOrig = false, gotStems = false;
+        PairLoader::OriginalReady origEv;
+        PairLoader::StemsReady stemsEv;
+
+        loader.onOriginalReady = [&] (const PairLoader::OriginalReady& ev) { gotOrig = true; origEv = ev; };
+        loader.onStemsReady = [&] (const PairLoader::StemsReady& ev) { gotStems = true; stemsEv = ev; };
+
+        loader.loadStemsPair (StemSource (aFile), StemSource (bFile));
+        REQUIRE (loader.waitUntilIdle (5000));
+        q.runAll();
+
+        REQUIRE (gotOrig);
+        REQUIRE (gotStems);
+        CHECK (origEv.isStemsA);
+        CHECK (stemsEv.isStemVsStem);
+        CHECK (stemsEv.session->hasStemsA());
+        CHECK (stemsEv.session->hasStems());
+        CHECK (stemsEv.alignment.offsetSamples == 512);
+    }
+
+    SECTION ("Sample-rate mismatch invokes onRateMismatch and resamples the chosen bundle")
+    {
+        for (const auto choice : { RateMismatchChoice::resampleA, RateMismatchChoice::resampleB })
+        {
+            TaskQueue q;
+            PairLoader::Backend be;
+            be.decodeStems = [&] (const juce::File& f, const DecodeOptions&)
+            {
+                DecodedStems d;
+                d.ok = true;
+                if (f == aFile)
+                {
+                    d.sampleRate = 48000.0;
+                    d.stems = stemsA;
+                }
+                else
+                {
+                    d.sampleRate = 44100.0;
+                    d.stems = stemsB;
+                }
+                return d;
+            };
+
+            PairLoader loader (q.poster(), nullptr, be);
+            bool sawMismatch = false;
+            double mismatchA = 0.0, mismatchB = 0.0;
+            PairLoader::StemsReady stemsEv;
+            bool gotStems = false;
+
+            loader.onRateMismatch = [&] (double rateA, double rateB, std::function<void (RateMismatchChoice)> reply)
+            {
+                sawMismatch = true;
+                mismatchA = rateA;
+                mismatchB = rateB;
+                reply (choice);
+            };
+            loader.onStemsReady = [&] (const PairLoader::StemsReady& ev) { gotStems = true; stemsEv = ev; };
+
+            loader.loadStemsPair (StemSource (aFile), StemSource (bFile));
+            REQUIRE (loader.waitUntilIdle (5000));
+            q.runAll();
+            REQUIRE (loader.waitUntilIdle (5000));
+            q.runAll();
+
+            REQUIRE (sawMismatch);
+            CHECK (mismatchA == 48000.0);
+            CHECK (mismatchB == 44100.0);
+            REQUIRE (gotStems);
+            const double expectedRate = (choice == RateMismatchChoice::resampleA) ? 44100.0 : 48000.0;
+            CHECK (stemsEv.session->sampleRate() == expectedRate);
+        }
+    }
+}
+
+//==============================================================================
+TEST_CASE ("AlignmentCache: the measurement sample rate round-trips; an entry without one loads as unknown", "[load][cache]")
+{
+    TempDir tmp;
+    const auto original = tmp.file ("a.stem.m4a", "original");
+    const auto stems = tmp.file ("b.stem.m4a", "stems");
+    const auto json = tmp.dir.getChildFile ("alignment-cache.json");
+
+    {
+        AlignmentCache cache (json);
+        cache.store (FileIdentity::of (original), FileIdentity::of (stems), { 882, +1, 0.99, false, 44100.0 });
+    }
+
+    SECTION ("a stored rate persists")
+    {
+        AlignmentCache reopened (json);
+        const auto hit = reopened.find (FileIdentity::of (original), FileIdentity::of (stems));
+        REQUIRE (hit.has_value());
+        CHECK (hit->offsetSamples == 882);
+        CHECK (hit->sampleRate == 44100.0);
+    }
+
+    SECTION ("an older cache file with no sampleRate field still loads, rate unknown (0)")
+    {
+        auto root = juce::JSON::parse (json.loadFileAsString());
+        auto* pairs = root.getProperty ("pairs", {}).getArray();
+        REQUIRE (pairs != nullptr);
+        REQUIRE (pairs->size() == 1);
+        REQUIRE ((*pairs)[0].getDynamicObject() != nullptr);
+        (*pairs)[0].getDynamicObject()->removeProperty ("sampleRate");
+        REQUIRE (json.replaceWithText (juce::JSON::toString (root)));
+        REQUIRE_FALSE (json.loadFileAsString().contains ("sampleRate"));
+
+        AlignmentCache legacy (json);
+        const auto hit = legacy.find (FileIdentity::of (original), FileIdentity::of (stems));
+        REQUIRE (hit.has_value());
+        CHECK (hit->offsetSamples == 882);
+        CHECK (hit->sampleRate == 0.0);
+    }
+}
+
+TEST_CASE ("PairLoader + AlignmentCache: a cached offset is converted to the session rate chosen at the mismatch prompt", "[load][loader][cache]")
+{
+    TempDir tmp;
+    const auto aFile = tmp.file ("a.stem.m4a", "A");
+    const auto bFile = tmp.file ("b.stem.m4a", "B");
+    AlignmentCache cache (tmp.dir.getChildFile ("cache.json"));
+
+    // Side A is 48 kHz; Side B is the same material delayed by 960 samples at 48 kHz (882 at 44.1 kHz), stored at 44.1 kHz.
+    const auto sig = noise (1 << 17, 91);
+    const auto stemsA = splitAndDelay (sig, 0);
+    auto stemsB = splitAndDelay (sig, 960);
+    for (auto& s : stemsB)
+        s = resample (s, 48000.0, 44100.0);
+
+    struct Result { bool fromCache = false; juce::int64 firstOffset = 0, finalOffset = 0; double sessionRate = 0.0; int corrections = 0; };
+
+    const auto run = [&] (RateMismatchChoice choice)
+    {
+        TaskQueue q;
+        PairLoader::Backend be;
+        be.decodeStems = [&] (const juce::File& f, const DecodeOptions&)
+        {
+            DecodedStems d;
+            d.ok = true;
+            d.sampleRate = (f == aFile) ? 48000.0 : 44100.0;
+            d.stems = (f == aFile) ? stemsA : stemsB;
+            return d;
+        };
+
+        PairLoader loader (q.poster(), &cache, be);
+        Result r;
+        bool gotStems = false;
+
+        loader.onRateMismatch = [&] (double, double, std::function<void (RateMismatchChoice)> reply) { reply (choice); };
+        loader.onStemsReady = [&] (const PairLoader::StemsReady& ev)
+        {
+            if (! gotStems)
+            {
+                gotStems = true;
+                r.fromCache = ev.fromCache;
+                r.firstOffset = ev.alignment.offsetSamples;
+                r.sessionRate = ev.session->sampleRate();
+            }
+        };
+        loader.onAlignmentCorrected = [&] (const auto&) { ++r.corrections; };
+
+        loader.loadStemsPair (StemSource (aFile), StemSource (bFile));
+        for (int i = 0; i < 4; ++i)
+        {
+            REQUIRE (loader.waitUntilIdle (30000));
+            q.runAll();
+        }
+
+        REQUIRE (gotStems);
+        const auto stored = cache.find (FileIdentity::of (aFile), FileIdentity::of (bFile));
+        REQUIRE (stored.has_value());
+        r.finalOffset = stored->offsetSamples;
+        CHECK (stored->sampleRate == r.sessionRate);
+        return r;
+    };
+
+    const auto storeCached = [&] (juce::int64 offset, double rate)
+    {
+        cache.store (FileIdentity::of (aFile), FileIdentity::of (bFile), { offset, +1, 0.99, false, rate });
+    };
+
+    SECTION ("measured at 44.1 kHz, loaded at 48 kHz (resample B)")
+    {
+        storeCached (882, 44100.0);
+        const auto r = run (RateMismatchChoice::resampleB);
+        CHECK (r.fromCache);
+        CHECK (r.sessionRate == 48000.0);
+        CHECK (std::abs (r.firstOffset - 960) <= 1);
+        CHECK (r.corrections == 0);
+    }
+
+    SECTION ("measured at 48 kHz, loaded at 44.1 kHz (resample A)")
+    {
+        storeCached (960, 48000.0);
+        const auto r = run (RateMismatchChoice::resampleA);
+        CHECK (r.fromCache);
+        CHECK (r.sessionRate == 44100.0);
+        CHECK (std::abs (r.firstOffset - 882) <= 1);
+        CHECK (r.corrections == 0);
+    }
+
+    SECTION ("a legacy entry (rate unknown) was measured at Side A's native rate")
+    {
+        storeCached (960, 0.0);
+        const auto r = run (RateMismatchChoice::resampleA);
+        CHECK (r.fromCache);
+        CHECK (std::abs (r.firstOffset - 882) <= 1);
+        CHECK (r.corrections == 0);
+
+        storeCached (960, 0.0);
+        const auto same = run (RateMismatchChoice::resampleB);
+        CHECK (same.fromCache);
+        CHECK (same.firstOffset == 960);
+        CHECK (same.corrections == 0);
+    }
+
+    SECTION ("switching the choice back and forth never reports a correction")
+    {
+        const auto first = run (RateMismatchChoice::resampleB);      // miss: measures at 48 kHz
+        CHECK_FALSE (first.fromCache);
+
+        const auto second = run (RateMismatchChoice::resampleA);     // hit: cached at 48 kHz, session 44.1 kHz
+        CHECK (second.fromCache);
+        CHECK (second.corrections == 0);
+
+        const auto third = run (RateMismatchChoice::resampleB);      // hit: cached at 44.1 kHz, session 48 kHz
+        CHECK (third.fromCache);
+        CHECK (third.corrections == 0);
+        CHECK (std::abs (third.firstOffset - 960) <= 1);
+    }
+}

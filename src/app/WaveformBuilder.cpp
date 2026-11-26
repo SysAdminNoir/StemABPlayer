@@ -17,6 +17,7 @@ WaveformBuilder::~WaveformBuilder()
     token->owner = nullptr;         // results still queued on the message thread are dropped
     shuttingDown = true;            // running jobs stop at their next cancel check
     ++originalGeneration;
+    ++stemsAGeneration;
     ++stemsGeneration;
     pool.removeAllJobs (true, 10000);
 }
@@ -24,7 +25,7 @@ WaveformBuilder::~WaveformBuilder()
 void WaveformBuilder::buildOriginal (std::shared_ptr<const Session> session)
 {
     const auto generation = ++originalGeneration;
-    if (session == nullptr || session->length() <= 0)
+    if (session == nullptr || ! session->hasOriginal() || session->length() <= 0)
         return;
 
     pool.addJob ([this, session, generation, tok = token]
@@ -42,6 +43,35 @@ void WaveformBuilder::buildOriginal (std::shared_ptr<const Session> session)
         {
             if (auto* owner = tok->owner; owner != nullptr && owner->originalGeneration.load() == generation && owner->onOriginalReady)
                 owner->onOriginalReady (summary);
+        });
+    });
+}
+
+void WaveformBuilder::buildStemsA (std::shared_ptr<const Session> session)
+{
+    const auto generation = ++stemsAGeneration;
+    if (session == nullptr || ! session->hasStemsA() || session->length() <= 0)
+        return;
+
+    pool.addJob ([this, session, generation, tok = token]
+    {
+        const CancelCheck cancel = [this, generation] { return shuttingDown.load() || stemsAGeneration.load() != generation; };
+        const auto length = session->length();
+
+        std::array<SummaryPtr, Session::numStems> result;
+        for (int i = 0; i < Session::numStems; ++i)
+        {
+            const float* channels[2] = { session->stemAChannel (i, 0), session->stemAChannel (i, 1) };
+            result[(size_t) i] = std::make_shared<const WaveformSummary> (
+                WaveformSummary::build (channels, 2, length, WaveformSummary::defaultBinSize, cancel));
+            if (isCancelled (cancel))
+                return;
+        }
+
+        juce::MessageManager::callAsync ([tok, generation, result]
+        {
+            if (auto* owner = tok->owner; owner != nullptr && owner->stemsAGeneration.load() == generation && owner->onStemsAReady)
+                owner->onStemsAReady (result);
         });
     });
 }
@@ -73,12 +103,33 @@ void WaveformBuilder::buildStems (std::shared_ptr<const Session> session)
                 return;
         }
 
-        const float* original[2] = { session->originalChannel (0), session->originalChannel (1) };
-        result.residual = std::make_shared<const WaveformSummary> (
-            WaveformSummary::buildResidual (original, 2, stems, Session::numStems, length,
-                                            WaveformSummary::defaultBinSize, cancel));
-        if (isCancelled (cancel))
-            return;
+        juce::AudioBuffer<float> sumA;
+        const float* original[2] = { nullptr, nullptr };
+        if (session->hasOriginal())
+        {
+            original[0] = session->originalChannel (0);
+            original[1] = session->originalChannel (1);
+        }
+        else if (session->hasStemsA())
+        {
+            sumA.setSize (2, (int) length, false, true, true);
+            for (int i = 0; i < Session::numStems; ++i)
+                for (int ch = 0; ch < 2; ++ch)
+                    if (const float* ptr = session->stemAChannel (i, ch))
+                        sumA.addFrom (ch, 0, ptr, (int) length);
+
+            original[0] = sumA.getReadPointer (0);
+            original[1] = sumA.getReadPointer (1);
+        }
+
+        if (original[0] != nullptr && original[1] != nullptr)
+        {
+            result.residual = std::make_shared<const WaveformSummary> (
+                WaveformSummary::buildResidual (original, 2, stems, Session::numStems, length,
+                                                WaveformSummary::defaultBinSize, cancel));
+            if (isCancelled (cancel))
+                return;
+        }
 
         juce::MessageManager::callAsync ([tok, generation, result]
         {

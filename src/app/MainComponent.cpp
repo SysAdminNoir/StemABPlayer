@@ -105,6 +105,10 @@ MainComponent::MainComponent()
     deviceManager.addChangeListener (this);
 
     loader.onStatusChanged = [this] { updateStatusText(); };
+    loader.onRateMismatch = [this] (double rateA, double rateB, std::function<void (RateMismatchChoice)> reply)
+    {
+        showRateMismatchPrompt (rateA, rateB, std::move (reply));
+    };
 
     scaleIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, settings.getScaleIndex (defaultScaleIndex));
 
@@ -122,6 +126,11 @@ MainComponent::MainComponent()
         originalPreviewShown = false;
         tracks.setOriginalSummary (std::move (s));
         tracks.setOriginalState (false);
+    };
+    waveforms.onStemsAReady = [this] (const std::array<WaveformBuilder::SummaryPtr, Session::numStems>& r)
+    {
+        stemASummaryReady = true;
+        tracks.setStemASummaries (r);
     };
     waveforms.onStemsReady = [this] (const WaveformBuilder::StemSummaries& r)
     {
@@ -212,12 +221,23 @@ MainComponent::MainComponent()
     // Stems
     for (int i = 0; i < Session::numStems; ++i)
     {
+        auto& hA = tracks.getStemAHeader (i);
+        hA.mute.onClick = [this, i] { toggleStemAMute (i); };
+        hA.solo.onClick = [this, i] { toggleStemASolo (i); };
+        hA.mute.setTooltip ("Mute Stem A " + juce::String (stemName ((Stem) i)));
+        hA.solo.setTooltip ("Solo Stem A " + juce::String (stemName ((Stem) i)));
+
         auto& h = tracks.getStemHeader (i);
         h.mute.onClick = [this, i] { toggleStemMute (i); };
         h.solo.onClick = [this, i] { toggleStemSolo (i); };
         h.mute.setTooltip ("Mute " + juce::String (stemName ((Stem) i)) + " (Shift+" + juce::String (i + 1) + ")");
         h.solo.setTooltip ("Solo " + juce::String (stemName ((Stem) i)) + " (" + juce::String (i + 1) + ")");
     }
+    tracks.getLinkMsButton().onClick = [this]
+    {
+        linkMuteSolo = tracks.getLinkMsButton().getToggleState();
+        updateMixButtons();
+    };
 
     // Master Gain, Clip
     deck.masterSlider.setRange (masterInfDb, 0.0, 0.1);
@@ -373,6 +393,9 @@ void MainComponent::pollSession()
                                 ? TrackArea::StemsState::noSession
                                 : TrackArea::StemsState::loading;
     tracks.setStemsState (stemsState);
+    tracks.setStemAState (s == nullptr ? TrackArea::StemsState::noSession
+                                       : s->hasStemsA() ? TrackArea::StemsState::ready
+                                                        : TrackArea::StemsState::noSession);
 
     if (s == shownSession)
         return;
@@ -383,31 +406,45 @@ void MainComponent::pollSession()
     if (s == nullptr)
     {
         waveforms.cancelOriginal();
+        waveforms.cancelStemsA();
         waveforms.cancelStems();
         tracks.setOriginalSummary (nullptr);
         tracks.setOriginalState (false);
+        tracks.clearStemASummaries();
         tracks.clearStemSummaries();
         tracks.setTimeline (0, 0.0);
         return;
     }
 
+    const bool svs = s->hasStemsA();
+    tracks.setStemVsStemMode (svs);
+    deck.setStemVsStemMode (svs);
     tracks.setTimeline (s->length(), s->sampleRate());
 
     if (previous == nullptr || ! s->sharesOriginalWith (*previous))
     {
-        // A new Original: its waveform, and the stem lanes start over - except for previews of this pair's
-        // files, which stay until the real summaries replace them.
-        originalSummaryReady = false;
-        if (! originalPreviewShown)
+        if (svs)
         {
-            tracks.setOriginalSummary (nullptr);
-            tracks.setOriginalState (true);
+            stemASummaryReady = false;
+            tracks.clearStemASummaries();
+            waveforms.buildStemsA (s);
         }
+        else
+        {
+            // A new Original: its waveform, and the stem lanes start over - except for previews of this pair's
+            // files, which stay until the real summaries replace them.
+            originalSummaryReady = false;
+            if (! originalPreviewShown)
+            {
+                tracks.setOriginalSummary (nullptr);
+                tracks.setOriginalState (true);
+            }
+            waveforms.buildOriginal (s);
+            tracks.setOriginalSubLabel (originalSubLabel (st.originalName, s->sampleRate()));
+        }
+
         if (! stemsPreviewShown)
             tracks.clearStemSummaries();
-        waveforms.buildOriginal (s);
-
-        tracks.setOriginalSubLabel (originalSubLabel (st.originalName, s->sampleRate()));
     }
 
     if (s->hasStems())
@@ -459,6 +496,12 @@ void MainComponent::timerCallback()
     // Meters. Peaks are read-and-reset, so every tap is read once per tick and fed to every meter that shows it.
     for (int i = 0; i < Session::numStems; ++i)
     {
+        const auto tapA = (MeterTap) ((int) MeterTap::DrumsA + i);
+        const auto lA = engine.readMeter (tapA, 0);
+        const auto rA = engine.readMeter (tapA, 1);
+        if (auto* m = tracks.getStemAHeader (i).getMeter())
+            m->setLevels (juce::jmax (lA.peak, rA.peak), juce::jmax (lA.rms, rA.rms));
+
         const auto tap = (MeterTap) ((int) MeterTap::Drums + i);
         const auto l = engine.readMeter (tap, 0);
         const auto r = engine.readMeter (tap, 1);
@@ -542,20 +585,53 @@ juce::File MainComponent::chooserFolder (AppSettings::Folder folder) const
 
 void MainComponent::chooseOriginal()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Open original (A)", chooserFolder (AppSettings::Folder::originals),
-                                                   audioFilePatterns);
-    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+    chooser = std::make_unique<juce::FileChooser> ("Open A: an original track, a stem file, or 1 to 4 stem files",
+                                                   chooserFolder (AppSettings::Folder::originals),
+                                                   "*.stem.m4a;*.stem.mp4;" + audioFilePatterns);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::canSelectMultipleItems,
                           [this] (const juce::FileChooser& fc)
                           {
-                              if (const auto f = fc.getResult(); f.existsAsFile())
+                              const auto chosen = fc.getResults();
+                              if (chosen.isEmpty())
+                                  return;
+
+                              if (chosen.size() == 1 && chosen.getFirst().existsAsFile() && ! isStemFile (chosen.getFirst()))
                               {
+                                  const auto f = chosen.getFirst();
                                   cancelResume();
+                                  openNotice.clear();
                                   settings.setLastUsedFolder (AppSettings::Folder::originals, f.getParentDirectory());
                                   originalFile = f;
+                                  stemSourceA = StemSource();
+                                  applyStemAPresence();
+                                  tracks.setStemVsStemMode (false);
+                                  deck.setStemVsStemMode (false);
                                   previewChosenOriginal();
                                   startLoadIfReady();
                                   updateStatusText();
+                                  return;
                               }
+
+                              juce::String error;
+                              const auto source = stemSourceFromChoice (chosen, error);
+                              if (source.isEmpty())
+                              {
+                                  openNotice = error;
+                                  updateStatusText();
+                                  return;
+                              }
+
+                              cancelResume();
+                              openNotice.clear();
+                              settings.setLastUsedFolder (AppSettings::Folder::originals, source.files().getFirst().getParentDirectory());
+                              stemSourceA = source;
+                              originalFile = juce::File();
+                              applyStemAPresence();
+                              tracks.setStemVsStemMode (true);
+                              deck.setStemVsStemMode (true);
+                              startLoadIfReady();
+                              updateStatusText();
                           });
 }
 
@@ -647,12 +723,32 @@ void MainComponent::applyStemPresence()
     updateMixButtons();
 }
 
+void MainComponent::applyStemAPresence()
+{
+    std::array<bool, Session::numStems> present {};
+    for (int i = 0; i < Session::numStems; ++i)
+    {
+        present[(size_t) i] = stemSourceA.isEmpty() || stemSourceA.hasStem (i);
+
+        if (! present[(size_t) i])
+        {
+            engine.setStemAMuted (i, false);
+            engine.setStemASoloed (i, false);
+        }
+    }
+
+    tracks.setStemsAPresent (present);
+    updateMixButtons();
+}
+
 void MainComponent::loadPair (const juce::File& original, const StemSource& stems)
 {
     cancelResume();
     openNotice.clear();
     originalFile = original;
+    stemSourceA = StemSource();
     stemSource = stems;
+    applyStemAPresence();
     applyStemPresence();
     startLoadIfReady();
     updateStatusText();
@@ -660,9 +756,17 @@ void MainComponent::loadPair (const juce::File& original, const StemSource& stem
 
 void MainComponent::startLoadIfReady()
 {
-    if (originalFile.existsAsFile() && stemSource.existsAsFiles())
+    if (! stemSourceA.isEmpty() && stemSourceA.existsAsFiles() && stemSource.existsAsFiles())
+    {
+        pairOriginal = juce::File();
+        pairStemsA = stemSourceA;
+        pairStems = stemSource;
+        loader.loadStemsPair (stemSourceA, stemSource);
+    }
+    else if (originalFile.existsAsFile() && stemSource.existsAsFiles())
     {
         pairOriginal = originalFile;
+        pairStemsA = StemSource();
         pairStems = stemSource;
         loader.load (originalFile, stemSource);
     }
@@ -711,21 +815,28 @@ void MainComponent::unloadAll()
     // engine's session; the audio thread retires it and releaseRetiredSessions() (timer) frees it here.
     previews.cancelAll();
     waveforms.cancelOriginal();
+    waveforms.cancelStemsA();
     waveforms.cancelStems();
     loader.unload();
 
     originalFile = pairOriginal = juce::File();
+    stemSourceA = pairStemsA = StemSource();
     stemSource = pairStems = StemSource();
+    applyStemAPresence();
     applyStemPresence();
     openNotice.clear();
     shownSession = nullptr;
-    originalSummaryReady = originalPreviewShown = stemsPreviewShown = false;
+    originalSummaryReady = stemASummaryReady = originalPreviewShown = stemsPreviewShown = false;
     previewLength = 0;
     previewRate = 0.0;
     previewNotice.clear();
 
+    tracks.setStemVsStemMode (false);
+    deck.setStemVsStemMode (false);
     tracks.setOriginalSummary (nullptr);
     tracks.setOriginalState (false);
+    tracks.clearStemASummaries();
+    tracks.setStemAState (TrackArea::StemsState::noSession);
     tracks.clearStemSummaries();
     tracks.setStemsState (TrackArea::StemsState::noSession);
     tracks.setOriginalSubLabel ({});
@@ -960,11 +1071,15 @@ void MainComponent::updateStatusText()
     juce::Array<HeaderBar::Segment> left, right;
     juce::StringArray lines;   // the full detail, for the tooltip
 
+    const bool hasStemSourceA = ! stemSourceA.isEmpty() && stemSourceA.existsAsFiles();
     const bool hasStemSource = stemSource.existsAsFiles();
     header.setFiles (originalFile.existsAsFile() ? originalFile : juce::File(),
+                     hasStemSourceA ? stemSourceA : StemSource(),
                      hasStemSource ? stemSource : StemSource());
 
-    lines.add ("Original:  " + (originalFile.existsAsFile() ? originalFile.getFileName() : juce::String ("(none)"))
+    const juce::String sideAText = hasStemSourceA ? stemSourceA.displayName()
+                                                  : (originalFile.existsAsFile() ? originalFile.getFileName() : juce::String ("(none)"));
+    lines.add ((hasStemSourceA ? "Stem A:  " : "Original:  ") + sideAText
                + (stemSource.isSet() ? "        Stem files:  " : "        Stem file:  ")
                + (hasStemSource ? stemSource.displayName() : juce::String ("(none)")));
 
@@ -1133,6 +1248,7 @@ void MainComponent::updateMixButtons()
     // Until the Stems and the Alignment arrive only A exists: B, R, the Crossfade and Mute/Solo are disabled
     // (the engine keeps them silent, then fades them in when the Session is upgraded).
     const bool stems = engine.sessionHasStems();
+    const bool stemsA = engine.sessionHasStemsA();
     stemControlsEnabled = stems;
 
     deck.residualButton.setToggleState (residual, juce::dontSendNotification);
@@ -1144,6 +1260,19 @@ void MainComponent::updateMixButtons()
 
     const int bPercent = juce::roundToInt (x * 100.0f);
     deck.setCrossfadeReadout ("A " + juce::String (100 - bPercent) + " " + middleDot + " B " + juce::String (bPercent));
+
+    std::array<bool, Session::numStems> mutedA {}, soloedA {};
+    for (int i = 0; i < Session::numStems; ++i)
+    {
+        auto& hA = tracks.getStemAHeader (i);
+        mutedA[(size_t) i] = engine.isStemAMuted (i);
+        soloedA[(size_t) i] = engine.isStemASoloed (i);
+        hA.mute.setToggleState (mutedA[(size_t) i], juce::dontSendNotification);
+        hA.solo.setToggleState (soloedA[(size_t) i], juce::dontSendNotification);
+        hA.mute.setEnabled (stemsA && tracks.isStemAPresent (i));
+        hA.solo.setEnabled (stemsA && tracks.isStemAPresent (i));
+    }
+    tracks.setAudibleStemsA (PlaybackEngine::audibleStems (mutedA, soloedA));
 
     std::array<bool, Session::numStems> muted {}, soloed {};
     for (int i = 0; i < Session::numStems; ++i)
@@ -1177,7 +1306,10 @@ void MainComponent::toggleStemSolo (int i)
 {
     if (! tracks.isStemPresent (i))
         return;
-    engine.setStemSoloed (i, ! engine.isStemSoloed (i));
+    const bool next = ! engine.isStemSoloed (i);
+    engine.setStemSoloed (i, next);
+    if (linkMuteSolo && tracks.isStemAPresent (i))
+        engine.setStemASoloed (i, next);
     updateMixButtons();
 }
 
@@ -1185,8 +1317,59 @@ void MainComponent::toggleStemMute (int i)
 {
     if (! tracks.isStemPresent (i))
         return;
-    engine.setStemMuted (i, ! engine.isStemMuted (i));
+    const bool next = ! engine.isStemMuted (i);
+    engine.setStemMuted (i, next);
+    if (linkMuteSolo && tracks.isStemAPresent (i))
+        engine.setStemAMuted (i, next);
     updateMixButtons();
+}
+
+void MainComponent::toggleStemASolo (int i)
+{
+    if (! tracks.isStemAPresent (i))
+        return;
+    const bool next = ! engine.isStemASoloed (i);
+    engine.setStemASoloed (i, next);
+    if (linkMuteSolo && tracks.isStemPresent (i))
+        engine.setStemSoloed (i, next);
+    updateMixButtons();
+}
+
+void MainComponent::toggleStemAMute (int i)
+{
+    if (! tracks.isStemAPresent (i))
+        return;
+    const bool next = ! engine.isStemAMuted (i);
+    engine.setStemAMuted (i, next);
+    if (linkMuteSolo && tracks.isStemPresent (i))
+        engine.setStemMuted (i, next);
+    updateMixButtons();
+}
+
+void MainComponent::showRateMismatchPrompt (double rateA, double rateB, std::function<void (RateMismatchChoice)> reply)
+{
+    const juce::String arrow (juce::CharPointer_UTF8 (" \xe2\x86\x92 "));
+    const juce::String hzA = juce::String (rateA, 0) + " Hz";
+    const juce::String hzB = juce::String (rateB, 0) + " Hz";
+
+    auto options = juce::MessageBoxOptions()
+        .withIconType (juce::MessageBoxIconType::WarningIcon)
+        .withTitle ("Sample Rate Mismatch")
+        .withMessage ("Side A is " + hzA + " and Side B is " + hzB + ".\nChoose which bundle to resample (linear-phase r8brain) so both match:")
+        .withButton ("Resample A (" + hzA + arrow + hzB + ")")
+        .withButton ("Resample B (" + hzB + arrow + hzA + ")")
+        .withButton ("Cancel")
+        .withAssociatedComponent (this);
+
+    juce::AlertWindow::showAsync (options, [reply = std::move (reply)] (int result)
+    {
+        if (result == 1)
+            reply (RateMismatchChoice::resampleA);
+        else if (result == 2)
+            reply (RateMismatchChoice::resampleB);
+        else
+            reply (RateMismatchChoice::cancel);
+    });
 }
 
 void MainComponent::toggleLoop()
