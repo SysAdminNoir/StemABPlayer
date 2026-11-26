@@ -2,6 +2,7 @@
 
 #include "app/PlatformWindows.h"
 #include "app/Theme.h"
+#include "decode/Decode.h"
 
 namespace stemab
 {
@@ -11,6 +12,22 @@ namespace
     const juce::String ellipsis (juce::CharPointer_UTF8 ("\xe2\x80\xa6"));
     const juce::String middleDot (juce::CharPointer_UTF8 ("\xc2\xb7"));
     const juce::String minusSign (juce::CharPointer_UTF8 ("\xe2\x88\x92"));
+    const juce::String enDash (juce::CharPointer_UTF8 ("\xe2\x80\x93"));
+    const juce::String copyrightSign (juce::CharPointer_UTF8 ("\xc2\xa9"));
+
+    constexpr const char* sourceCodeUrl = "https://github.com/SysAdminNoir/StemABPlayer";
+
+    /** The running application's version, e.g. "1.0.0". */
+    juce::String appVersionString()
+    {
+       #ifdef JUCE_APPLICATION_VERSION_STRING
+        return JUCE_APPLICATION_VERSION_STRING;
+       #else
+        if (auto* app = juce::JUCEApplication::getInstance())
+            return app->getApplicationVersion();
+        return {};
+       #endif
+    }
 
     constexpr float baseWidth = 800.0f;
     constexpr float baseHeight = 560.0f;
@@ -29,6 +46,7 @@ namespace
             case PreferencesPanel::Section::interface: return "Interface";
             case PreferencesPanel::Section::audio:     return "Audio";
             case PreferencesPanel::Section::session:   return "Session";
+            case PreferencesPanel::Section::about:     return "About";
         }
         return "";
     }
@@ -41,6 +59,7 @@ namespace
             case PreferencesPanel::Section::interface: return "Text and control size, colors";
             case PreferencesPanel::Section::audio:     return "Output device, sample rate and buffer size";
             case PreferencesPanel::Section::session:   return "What comes back when the app starts";
+            case PreferencesPanel::Section::about:     return "Version, license and credits";
         }
         return "";
     }
@@ -224,6 +243,74 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
     sessionPage.addAndMakeVisible (settingsFileNote);
     addChildComponent (sessionPage);
 
+    // About
+    aboutName.setText ("Stem A/B Player", juce::dontSendNotification);
+    aboutPage.addAndMakeVisible (aboutName);
+
+    const auto version = appVersionString();
+    aboutVersion.setText (version.isNotEmpty() ? "Version " + version : juce::String(), juce::dontSendNotification);
+    styleNote (aboutVersion);
+    aboutPage.addAndMakeVisible (aboutVersion);
+
+    aboutDescription.setText ("Compare an original mix (or a stem set) against stems, A/B, with a live null / residual.",
+                              juce::dontSendNotification);
+    aboutDescription.setJustificationType (juce::Justification::topLeft);
+    aboutDescription.setMinimumHorizontalScale (1.0f);
+    aboutPage.addAndMakeVisible (aboutDescription);
+
+    aboutLicenseCaption.setText ("LICENSE", juce::dontSendNotification);
+    styleCaption (aboutLicenseCaption);
+    aboutPage.addAndMakeVisible (aboutLicenseCaption);
+
+    aboutLicense.setText ("Free software under the GNU Affero General Public License v3.0", juce::dontSendNotification);
+    aboutLicense.setJustificationType (juce::Justification::topLeft);
+    aboutLicense.setMinimumHorizontalScale (1.0f);
+    aboutPage.addAndMakeVisible (aboutLicense);
+
+    aboutCopyright.setText (copyrightSign + " The Stem A/B Player contributors", juce::dontSendNotification);
+    styleNote (aboutCopyright);
+    aboutPage.addAndMakeVisible (aboutCopyright);
+
+    aboutSource.setButtonText ("Source code: github.com/SysAdminNoir/StemABPlayer");
+    aboutSource.setURL (juce::URL (sourceCodeUrl));
+    aboutSource.setTooltip (sourceCodeUrl);
+    aboutPage.addAndMakeVisible (aboutSource);
+
+    aboutBuiltWithCaption.setText ("BUILT WITH", juce::dontSendNotification);
+    styleCaption (aboutBuiltWithCaption);
+    aboutPage.addAndMakeVisible (aboutBuiltWithCaption);
+
+    {
+        // The runtime string reads "FFmpeg 9.0.2 (libavformat ..., libavcodec ...)": drop its own name, the line has one.
+        auto ffmpeg = juce::String (ffmpegVersionString());
+        if (ffmpeg.startsWith ("FFmpeg "))
+            ffmpeg = ffmpeg.substring (7);
+
+        juce::StringArray credits;
+        credits.add ("JUCE 8 (AGPLv3)");
+        credits.add ("FFmpeg (LGPL 2.1+), " + ffmpeg);
+        credits.add ("r8brain-free-src (MIT)");
+       #if JUCE_ASIO
+        credits.add ("Steinberg ASIO SDK (GPLv3 option)");
+       #else
+        credits.add ("Built without ASIO");
+       #endif
+        credits.add ("Archivo / Archivo Narrow and JetBrains Mono fonts (SIL OFL 1.1)");
+        credits.add ("Okabe" + enDash + "Ito color-blind safe palette");
+        aboutCredits.setText (credits.joinIntoString ("\n"), juce::dontSendNotification);
+    }
+    styleNote (aboutCredits);
+    aboutPage.addAndMakeVisible (aboutCredits);
+
+    aboutTrademarks.setText ("ASIO is a trademark of Steinberg Media Technologies GmbH.\n"
+                             "Stems and the .stem.m4a format are by Native Instruments; not affiliated.",
+                             juce::dontSendNotification);
+    styleNote (aboutTrademarks);
+    aboutPage.addAndMakeVisible (aboutTrademarks);
+
+    refreshAboutColours();
+    addChildComponent (aboutPage);
+
     refreshFolders();
     setPalette (settings.getColourPalette());
     showSection (Section::folders);
@@ -264,7 +351,17 @@ void PreferencesPanel::setUiScale (float s)
     sizeCaption.setFont (captionFont);
     paletteCaption.setFont (captionFont);
 
-    for (auto* l : { &foldersNote, &sizeNote, &paletteNote, &sessionNote })
+    aboutLicenseCaption.setFont (captionFont);
+    aboutBuiltWithCaption.setFont (captionFont);
+    aboutName.setFont (theme::uiFont (theme::em (1.3f, s), true));
+    aboutDescription.setFont (theme::uiFont (theme::em (0.95f, s)));
+    aboutLicense.setFont (theme::uiFont (theme::em (0.95f, s)));
+    aboutSource.setFont (theme::uiFont (theme::em (0.95f, s)), false, juce::Justification::centredLeft);
+    for (auto* l : { &aboutName, &aboutDescription, &aboutLicense })
+        l->setBorderSize ({ 0, 0, 0, 0 });
+
+    for (auto* l : { &foldersNote, &sizeNote, &paletteNote, &sessionNote,
+                     &aboutVersion, &aboutCopyright, &aboutCredits, &aboutTrademarks })
     {
         l->setFont (noteFont);
         l->setBorderSize ({ 0, 0, 0, 0 });
@@ -298,6 +395,7 @@ void PreferencesPanel::setPalette (AppSettings::Palette palette)
 void PreferencesPanel::refreshPalette()
 {
     refreshFolders();       // the hint colours
+    refreshAboutColours();
     sendLookAndFeelChange();
     repaint();
 }
@@ -313,6 +411,7 @@ void PreferencesPanel::showSection (Section s)
     interfacePage.setVisible (s == Section::interface);
     audioPage.setVisible (s == Section::audio);
     sessionPage.setVisible (s == Section::session);
+    aboutPage.setVisible (s == Section::about);
 
     if (s == Section::folders)
         refreshFolders();
@@ -320,6 +419,15 @@ void PreferencesPanel::showSection (Section s)
 }
 
 //==============================================================================
+void PreferencesPanel::refreshAboutColours()
+{
+    for (auto* l : { &aboutName, &aboutDescription, &aboutLicense })
+        l->setColour (juce::Label::textColourId, theme::colour (C::text));
+
+    aboutSource.setColour (juce::HyperlinkButton::textColourId, theme::colour (C::accent));
+    aboutSource.repaint();
+}
+
 void PreferencesPanel::refreshFolders()
 {
     const AppSettings::Folder folders[2] { AppSettings::Folder::originals, AppSettings::Folder::stemFiles };
@@ -430,7 +538,7 @@ void PreferencesPanel::resized()
     }
 
     auto page = contentArea().withTrimmedTop (px (76.0f));
-    for (auto* p : { &foldersPage, &interfacePage, &audioPage, &sessionPage })
+    for (auto* p : { &foldersPage, &interfacePage, &audioPage, &sessionPage, &aboutPage })
         p->setBounds (page);
 
     const auto local = page.withZeroOrigin();
@@ -495,6 +603,30 @@ void PreferencesPanel::resized()
         r.removeFromTop (px (12.0f));
         settingsFileNote.setBounds (r.removeFromBottom (px (22.0f)));
         sessionNote.setBounds (r.removeFromTop (px (130.0f)));
+    }
+
+    // About (base scale: 414 of the page's 440)
+    {
+        auto r = local;
+        aboutName.setBounds (r.removeFromTop (px (28.0f)));
+        aboutVersion.setBounds (r.removeFromTop (px (18.0f)));
+        r.removeFromTop (px (8.0f));
+        aboutDescription.setBounds (r.removeFromTop (px (38.0f)));
+        r.removeFromTop (px (20.0f));
+
+        aboutLicenseCaption.setBounds (r.removeFromTop (px (18.0f)));
+        r.removeFromTop (px (6.0f));
+        aboutLicense.setBounds (r.removeFromTop (px (20.0f)));
+        aboutCopyright.setBounds (r.removeFromTop (px (20.0f)));
+        r.removeFromTop (px (4.0f));
+        aboutSource.setBounds (r.removeFromTop (px (22.0f)).withWidth (px (420.0f)));
+        r.removeFromTop (px (20.0f));
+
+        aboutBuiltWithCaption.setBounds (r.removeFromTop (px (18.0f)));
+        r.removeFromTop (px (6.0f));
+        aboutCredits.setBounds (r.removeFromTop (px (102.0f)));
+        r.removeFromTop (px (14.0f));
+        aboutTrademarks.setBounds (r.removeFromTop (px (52.0f)));
     }
 }
 
