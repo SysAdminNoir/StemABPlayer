@@ -4,6 +4,8 @@
 #include "app/Theme.h"
 #include "decode/Decode.h"
 
+#include "StemABImages.h"
+
 namespace stemab
 {
 
@@ -16,6 +18,7 @@ namespace
     const juce::String copyrightSign (juce::CharPointer_UTF8 ("\xc2\xa9"));
 
     constexpr const char* sourceCodeUrl = "https://github.com/argentstygian/StemABPlayer";
+    constexpr const char* authorUrl = "https://github.com/argentstygian";
 
     /** The running application's version, e.g. "1.0.0". */
     juce::String appVersionString()
@@ -83,6 +86,295 @@ namespace
         b.setLitColours (C::colourB, C::inkDark, false);
     }
 }
+
+//==============================================================================
+/** The author's picture on the About page: a round badge (bezel, ring in the accent colour, sunken shadow). */
+class AvatarBadge final : public juce::Component,
+                          private juce::Timer
+{
+public:
+    AvatarBadge()
+    {
+        image = juce::ImageCache::getFromMemory (StemABImages::avatar_jpg, StemABImages::avatar_jpgSize);
+    }
+
+    ~AvatarBadge() override { stopTimer(); }
+
+    void setUiScale (float s)
+    {
+        uiScale = s;
+        repaint();
+    }
+
+    bool hitTest (int x, int y) override
+    {
+        const auto d = discBounds();
+        const auto dx = (float) x - d.getCentreX();
+        const auto dy = (float) y - d.getCentreY();
+        return dx * dx + dy * dy <= d.getWidth() * d.getWidth() * 0.25f;
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isLeftButtonDown())
+            registerClick();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const float s = uiScale;
+        const auto disc = discBounds();
+        const auto face = disc.reduced (4.0f * s);
+        const auto f = frame();
+
+        // Well under the picture, with a faint lip along the bottom edge
+        g.setColour (juce::Colour (0x12ffffff));
+        g.fillEllipse (disc.translated (0.0f, s));
+        g.setColour (theme::colour (C::slot));
+        g.fillEllipse (disc);
+
+        {
+            juce::Graphics::ScopedSaveState save (g);
+            juce::Path clip;
+            clip.addEllipse (face);
+            g.reduceClipRegion (clip);
+
+            g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+            if (image.isValid())
+            {
+                g.setOpacity (1.0f);
+                g.drawImage (image, face, juce::RectanglePlacement::fillDestination);
+
+                if (f.invertedAlpha > 0.0f && inverted.isValid())
+                {
+                    g.setOpacity (f.invertedAlpha);
+                    g.drawImage (inverted, face.translated (f.slideOffset * face.getWidth(), 0.0f),
+                                 juce::RectanglePlacement::fillDestination);
+                }
+            }
+            else
+            {
+                g.setColour (theme::colour (C::padOff));
+                g.fillEllipse (face);
+            }
+
+            if (f.greyAlpha > 0.0f)
+            {
+                g.setColour (juce::Colour (0xff808080).withAlpha (f.greyAlpha));
+                g.fillEllipse (face);
+            }
+
+            // Sunken: darker towards the rim, a little heavier at the top
+            const auto centre = face.getCentre().translated (0.0f, face.getHeight() * 0.1f);
+            juce::ColourGradient shade (juce::Colours::transparentBlack, centre.x, centre.y,
+                                        juce::Colour (0x99000000), centre.x + face.getWidth() * 0.58f, centre.y, true);
+            shade.addColour (0.72, juce::Colours::transparentBlack);
+            g.setGradientFill (shade);
+            g.fillEllipse (face);
+        }
+
+        // The ring: accent, with a dimmer one just inside it
+        g.setColour (theme::colour (C::accent).withAlpha (0.22f));
+        g.drawEllipse (disc.reduced (2.6f * s), 1.5f * s);
+        g.setColour (theme::colour (C::accent).withAlpha (0.92f));
+        g.drawEllipse (disc.reduced (0.75f * s), 1.5f * s);
+
+        if (f.plateAlpha > 0.0f)
+            paintReadout (g, f.plateAlpha);
+    }
+
+private:
+    enum class Phase { idle, running };
+
+    struct Frame
+    {
+        float slideOffset = 0.0f;       // fraction of the picture's width still to travel
+        float invertedAlpha = 0.0f;
+        float greyAlpha = 0.0f;
+        float plateAlpha = 0.0f;
+    };
+
+    // Timings (ms): slide and cross-fade, grey hold, readout shown, fade back
+    static constexpr double slideMs = 1000.0, holdMs = 400.0, readoutMs = 3000.0, fadeMs = 500.0;
+    static constexpr double readoutFadeInMs = 150.0;
+    static constexpr double clickGapMs = 600.0;
+    static constexpr int clicksNeeded = 7;
+
+    static float smooth (float lo, float hi, float v) noexcept
+    {
+        const auto t = juce::jlimit (0.0f, 1.0f, (v - lo) / (hi - lo));
+        return t * t * (3.0f - 2.0f * t);
+    }
+
+    juce::Rectangle<float> discBounds() const
+    {
+        const auto d = (float) theme::scaled (84.0f, uiScale);
+        return { (float) getWidth() - d, 0.0f, d, d };
+    }
+
+    void registerClick()
+    {
+        if (phase == Phase::running)
+        {
+            clickCount = 0;
+            return;
+        }
+
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+        clickCount = (clickCount > 0 && now - lastClickMs < clickGapMs) ? clickCount + 1 : 1;
+        lastClickMs = now;
+
+        if (clickCount >= clicksNeeded)
+        {
+            clickCount = 0;
+            begin();
+        }
+    }
+
+    void begin()
+    {
+        if (image.isValid() && ! inverted.isValid())
+            inverted = makeInverted (image);
+
+        phase = Phase::running;
+        startMs = juce::Time::getMillisecondCounterHiRes();
+        startTimerHz (60);
+        repaint();
+    }
+
+    void timerCallback() override
+    {
+        if (juce::Time::getMillisecondCounterHiRes() - startMs >= slideMs + holdMs + readoutMs + fadeMs)
+        {
+            phase = Phase::idle;
+            stopTimer();
+        }
+        repaint();
+    }
+
+    Frame frame() const
+    {
+        Frame f;
+        if (phase != Phase::running)
+            return f;
+
+        const auto t = juce::Time::getMillisecondCounterHiRes() - startMs;
+
+        if (t < slideMs)
+        {
+            const auto u = (float) (t / slideMs);
+            const auto eased = 1.0f - (1.0f - u) * (1.0f - u) * (1.0f - u);
+            f.slideOffset = 1.0f - eased;
+            f.invertedAlpha = 1.0f - 0.5f * smooth (0.5f, 1.0f, eased);
+            f.greyAlpha = smooth (0.72f, 1.0f, eased);
+        }
+        else if (t < slideMs + holdMs + readoutMs)
+        {
+            f.greyAlpha = 1.0f;
+            f.plateAlpha = (float) juce::jlimit (0.0, 1.0, (t - slideMs - holdMs) / readoutFadeInMs);
+        }
+        else
+        {
+            const auto fade = (float) juce::jlimit (0.0, 1.0, 1.0 - (t - slideMs - holdMs - readoutMs) / fadeMs);
+            f.greyAlpha = fade;
+            f.plateAlpha = fade;
+        }
+        return f;
+    }
+
+    static juce::Image makeInverted (const juce::Image& source)
+    {
+        juce::Image out (juce::Image::ARGB, source.getWidth(), source.getHeight(), true);
+        {
+            juce::Graphics g (out);
+            g.drawImageAt (source, 0, 0);
+        }
+
+        juce::Image::BitmapData data (out, juce::Image::BitmapData::readWrite);
+        for (int y = 0; y < data.height; ++y)
+            for (int x = 0; x < data.width; ++x)
+            {
+                const auto c = data.getPixelColour (x, y);
+                data.setPixelColour (x, y, juce::Colour::fromRGBA ((juce::uint8) (255 - c.getRed()),
+                                                                   (juce::uint8) (255 - c.getGreen()),
+                                                                   (juce::uint8) (255 - c.getBlue()), c.getAlpha()));
+            }
+        return out;
+    }
+
+    void paintReadout (juce::Graphics& g, float alpha) const
+    {
+        const float s = uiScale;
+        const auto first = "NULL DEPTH  " + minusSign + juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x9e")) + " dB";
+        const juce::String second ("PERFECT");
+        const auto font = theme::monoFont (10.5f * s);
+        const auto boldFont = theme::monoFont (10.5f * s, true);
+
+        const float textW = juce::jmax (juce::GlyphArrangement::getStringWidth (font, first),
+                                        juce::GlyphArrangement::getStringWidth (boldFont, second));
+        const float w = juce::jmin ((float) getWidth(), std::ceil (textW) + 20.0f * s);
+        const float lineH = 14.0f * s;
+        const juce::Rectangle<float> plate ((float) getWidth() - w, 66.0f * s, w, 2.0f * lineH + 8.0f * s);
+
+        g.beginTransparencyLayer (alpha);
+        theme::drawScreen (g, plate, s, 4.0f);
+
+        auto text = plate.reduced (0.0f, 4.0f * s);
+        g.setColour (theme::colour (C::nullDepth));
+        g.setFont (font);
+        g.drawText (first, text.removeFromTop (lineH), juce::Justification::centred, false);
+        g.setFont (boldFont);
+        g.drawText (second, text.removeFromTop (lineH), juce::Justification::centred, false);
+        g.endTransparencyLayer();
+    }
+
+    juce::Image image, inverted;
+    float uiScale = 1.0f;
+    Phase phase = Phase::idle;
+    int clickCount = 0;
+    double lastClickMs = 0.0, startMs = 0.0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AvatarBadge)
+};
+
+//==============================================================================
+/** The source link as a pad: the unlit pad face with the address in the accent colour. */
+class LinkPad final : public juce::HyperlinkButton
+{
+public:
+    LinkPad (const juce::String& text, const juce::URL& url) : juce::HyperlinkButton (text, url) {}
+
+    void setUiScale (float s)
+    {
+        uiScale = s;
+        repaint();
+    }
+
+    juce::Font padFont() const      { return theme::uiFont (theme::em (0.92f, uiScale), theme::Weight::semiBold); }
+
+    /** The width that fits the text with its padding. */
+    int preferredWidth() const
+    {
+        return (int) std::ceil (juce::GlyphArrangement::getStringWidth (padFont(), getButtonText()))
+             + 2 * theme::scaled (14.0f, uiScale);
+    }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        const float s = uiScale;
+        auto face = getLocalBounds().toFloat().withTrimmedBottom (2.0f * s);     // the pad's shadow is drawn below
+        theme::drawPad (g, face, s, false, {}, highlighted, down, isEnabled(), 0.0f, 4.0f);
+
+        if (down)
+            face = face.translated (0.0f, juce::jmax (1.0f, s));
+        g.setColour (theme::colour (C::accent));
+        g.setFont (padFont());
+        g.drawText (getButtonText(), face, juce::Justification::centred, false);
+    }
+
+private:
+    float uiScale = 1.0f;
+};
 
 //==============================================================================
 PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm, Callbacks cb)
@@ -244,13 +536,16 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
     addChildComponent (sessionPage);
 
     // About
-    aboutName.setText ("Stem A/B Player", juce::dontSendNotification);
-    aboutPage.addAndMakeVisible (aboutName);
-
     const auto version = appVersionString();
-    aboutVersion.setText (version.isNotEmpty() ? "Version " + version : juce::String(), juce::dontSendNotification);
-    styleNote (aboutVersion);
-    aboutPage.addAndMakeVisible (aboutVersion);
+    aboutVersionText = version.isNotEmpty() ? "v" + version : juce::String();
+
+    avatar = std::make_unique<AvatarBadge>();
+    aboutPage.addAndMakeVisible (*avatar);
+
+    aboutHandle.setButtonText ("@argentstygian");
+    aboutHandle.setURL (juce::URL (authorUrl));
+    aboutHandle.setTooltip (authorUrl);
+    aboutPage.addAndMakeVisible (aboutHandle);
 
     aboutDescription.setText ("Compare an original mix (or a stem set) against stems, A/B, with a live null / residual.",
                               juce::dontSendNotification);
@@ -271,36 +566,31 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
     styleNote (aboutCopyright);
     aboutPage.addAndMakeVisible (aboutCopyright);
 
-    aboutSource.setButtonText ("Source code: github.com/argentstygian/StemABPlayer");
-    aboutSource.setURL (juce::URL (sourceCodeUrl));
-    aboutSource.setTooltip (sourceCodeUrl);
-    aboutPage.addAndMakeVisible (aboutSource);
+    aboutSource = std::make_unique<LinkPad> ("github.com/argentstygian/StemABPlayer", juce::URL (sourceCodeUrl));
+    aboutSource->setTooltip (sourceCodeUrl);
+    aboutPage.addAndMakeVisible (*aboutSource);
 
     aboutBuiltWithCaption.setText ("BUILT WITH", juce::dontSendNotification);
     styleCaption (aboutBuiltWithCaption);
     aboutPage.addAndMakeVisible (aboutBuiltWithCaption);
 
     {
-        // The runtime string reads "FFmpeg 9.0.2 (libavformat ..., libavcodec ...)": drop its own name, the line has one.
+        // The runtime string reads "FFmpeg 9.0.2 (libavformat ..., libavcodec ...)": the row has the name already.
         auto ffmpeg = juce::String (ffmpegVersionString());
         if (ffmpeg.startsWith ("FFmpeg "))
             ffmpeg = ffmpeg.substring (7);
 
-        juce::StringArray credits;
-        credits.add ("JUCE 8 (AGPLv3)");
-        credits.add ("FFmpeg (LGPL 2.1+), " + ffmpeg);
-        credits.add ("r8brain-free-src (MIT)");
+        creditRows.push_back ({ "JUCE 8", "AGPLv3", {} });
+        creditRows.push_back ({ "FFmpeg", "LGPL 2.1+", ffmpeg });
+        creditRows.push_back ({ "r8brain-free-src", "MIT", {} });
        #if JUCE_ASIO
-        credits.add ("Steinberg ASIO SDK (GPLv3 option)");
+        creditRows.push_back ({ "Steinberg ASIO SDK", "GPLv3 option", {} });
        #else
-        credits.add ("Built without ASIO");
+        creditRows.push_back ({ "Built without ASIO", {}, {} });
        #endif
-        credits.add ("Archivo / Archivo Narrow and JetBrains Mono fonts (SIL OFL 1.1)");
-        credits.add ("Okabe" + enDash + "Ito color-blind safe palette");
-        aboutCredits.setText (credits.joinIntoString ("\n"), juce::dontSendNotification);
+        creditRows.push_back ({ "Archivo, Archivo Narrow, JetBrains Mono fonts", "SIL OFL 1.1", {} });
+        creditRows.push_back ({ "Okabe" + enDash + "Ito palette", "color-blind safe", {} });
     }
-    styleNote (aboutCredits);
-    aboutPage.addAndMakeVisible (aboutCredits);
 
     aboutTrademarks.setText ("ASIO is a trademark of Steinberg Media Technologies GmbH.\n"
                              "Stems and the .stem.m4a format are by Native Instruments; not affiliated.",
@@ -353,19 +643,21 @@ void PreferencesPanel::setUiScale (float s)
 
     aboutLicenseCaption.setFont (captionFont);
     aboutBuiltWithCaption.setFont (captionFont);
-    aboutName.setFont (theme::uiFont (theme::em (1.3f, s), true));
     aboutDescription.setFont (theme::uiFont (theme::em (0.95f, s)));
     aboutLicense.setFont (theme::uiFont (theme::em (0.95f, s)));
-    aboutSource.setFont (theme::uiFont (theme::em (0.95f, s)), false, juce::Justification::centredLeft);
-    for (auto* l : { &aboutName, &aboutDescription, &aboutLicense })
+    aboutHandle.setFont (theme::uiFont (theme::em (0.82f, s)), false, juce::Justification::centredRight);
+    avatar->setUiScale (s);
+    aboutSource->setUiScale (s);
+    for (auto* l : { &aboutLicenseCaption, &aboutBuiltWithCaption, &aboutDescription, &aboutLicense })
         l->setBorderSize ({ 0, 0, 0, 0 });
 
-    for (auto* l : { &foldersNote, &sizeNote, &paletteNote, &sessionNote,
-                     &aboutVersion, &aboutCopyright, &aboutCredits, &aboutTrademarks })
+    for (auto* l : { &foldersNote, &sizeNote, &paletteNote, &sessionNote, &aboutCopyright })
     {
         l->setFont (noteFont);
         l->setBorderSize ({ 0, 0, 0, 0 });
     }
+    aboutTrademarks.setFont (theme::uiFont (theme::em (0.74f, s)));
+    aboutTrademarks.setBorderSize ({ 0, 0, 0, 0 });
     settingsFileNote.setFont (theme::uiFont (theme::em (0.78f, s)));
     settingsFileNote.setBorderSize ({ 0, 0, 0, 0 });
 
@@ -421,11 +713,18 @@ void PreferencesPanel::showSection (Section s)
 //==============================================================================
 void PreferencesPanel::refreshAboutColours()
 {
-    for (auto* l : { &aboutName, &aboutDescription, &aboutLicense })
+    for (auto* l : { &aboutDescription, &aboutLicense })
         l->setColour (juce::Label::textColourId, theme::colour (C::text));
+    for (auto* l : { &aboutLicenseCaption, &aboutBuiltWithCaption })
+        l->setColour (juce::Label::textColourId, theme::colour (C::silk));
+    for (auto* l : { &aboutCopyright, &aboutTrademarks })
+        l->setColour (juce::Label::textColourId, theme::colour (C::muted));
 
-    aboutSource.setColour (juce::HyperlinkButton::textColourId, theme::colour (C::accent));
-    aboutSource.repaint();
+    aboutHandle.setColour (juce::HyperlinkButton::textColourId, theme::colour (C::muted));
+    aboutHandle.repaint();
+    aboutSource->repaint();
+    avatar->repaint();
+    repaint();
 }
 
 void PreferencesPanel::refreshFolders()
@@ -506,6 +805,12 @@ void PreferencesPanel::paint (juce::Graphics& g)
     g.setColour (theme::colour (C::panelEdge));
     g.fillRect (nav.getRight() - 1, 0, 1, getHeight());
 
+    if (section == Section::about)
+    {
+        paintAbout (g);
+        return;
+    }
+
     // Section title + subtitle
     auto header = contentArea().removeFromTop (theme::scaled (52.0f, s));
     g.setColour (theme::colour (C::text));
@@ -520,6 +825,88 @@ void PreferencesPanel::paint (juce::Graphics& g)
     g.fillRect (c.getX(), c.getY() + theme::scaled (60.0f, s), c.getWidth(), 1);
     g.setColour (theme::colour (C::panelHi).withAlpha (0.5f));
     g.fillRect (c.getX(), c.getY() + theme::scaled (60.0f, s) + 1, c.getWidth(), 1);
+}
+
+void PreferencesPanel::paintAbout (juce::Graphics& g) const
+{
+    const float s = uiScale;
+    const auto px = [s] (float v) { return theme::scaled (v, s); };
+    const auto& r = aboutRects;
+
+    juce::Graphics::ScopedSaveState save (g);
+    g.setOrigin (contentArea().getPosition());
+
+    // Name and version on a sunken screen, as the transport time
+    {
+        const auto plate = r.plate.toFloat();
+        theme::drawScreen (g, plate, s);
+
+        const auto inner = r.plate.reduced (px (18.0f), 0);
+        const auto versionFont = theme::monoFont (22.0f * s, true);
+        const float versionW = aboutVersionText.isEmpty() ? 0.0f
+                                                          : std::ceil (juce::GlyphArrangement::getStringWidth (versionFont, aboutVersionText));
+        auto right = inner.withLeft (inner.getRight() - (int) versionW - px (2.0f));
+
+        g.setColour (theme::colour (C::text));
+        g.setFont (theme::uiFont (theme::em (1.5f, s), true));
+        g.drawText ("Stem A/B Player", inner.withRight (right.getX() - px (12.0f)), juce::Justification::centredLeft, true);
+
+        if (versionW > 0.0f)
+        {
+            theme::drawSilk (g, "Version", right.removeFromTop (px (20.0f)).withTrimmedTop (px (7.0f)).toFloat(), 9.0f * s,
+                             theme::colour (C::screenDim), juce::Justification::centredRight);
+            g.setColour (theme::colour (C::screenText));
+            g.setFont (versionFont);
+            g.drawText (aboutVersionText, right.withTrimmedBottom (px (6.0f)), juce::Justification::centredRight, false);
+        }
+    }
+
+    // Hairline rules after the captions
+    const auto rule = [&g] (juce::Rectangle<int> area)
+    {
+        g.setColour (theme::colour (C::panelEdge));
+        g.fillRect (area.getX(), area.getY(), area.getWidth(), 1);
+        g.setColour (theme::colour (C::panelHi).withAlpha (0.5f));
+        g.fillRect (area.getX(), area.getY() + 1, area.getWidth(), 1);
+    };
+    rule (r.licenceRule);
+    rule (r.builtWithRule);
+    rule (r.trademarkRule);
+
+    // Credits: component | licence, one hairline between the rows
+    {
+        const auto nameFont = theme::uiFont (theme::em (0.9f, s));
+        const auto detailFont = theme::monoFont (10.0f * s);
+        const int nameW = px (330.0f);
+        const int rowH = px (21.0f);
+        const int detailH = px (15.0f);
+        auto area = r.credits;
+
+        for (size_t i = 0; i < creditRows.size(); ++i)
+        {
+            const auto& row = creditRows[i];
+            auto line = area.removeFromTop (rowH);
+
+            g.setFont (nameFont);
+            g.setColour (theme::colour (C::text));
+            g.drawText (row.name, line.removeFromLeft (nameW), juce::Justification::centredLeft, true);
+            g.setColour (theme::colour (C::muted));
+            g.drawText (row.licence, line, juce::Justification::centredLeft, true);
+
+            if (row.detail.isNotEmpty())
+            {
+                g.setFont (detailFont);
+                g.setColour (theme::colour (C::muted).withMultipliedAlpha (0.8f));
+                g.drawText (row.detail, area.removeFromTop (detailH), juce::Justification::centredLeft, true);
+            }
+
+            if (i + 1 < creditRows.size())
+            {
+                g.setColour (theme::colour (C::panelEdge).withAlpha (0.8f));
+                g.fillRect (area.getX(), area.getY() - 1, area.getWidth(), 1);
+            }
+        }
+    }
 }
 
 void PreferencesPanel::resized()
@@ -538,8 +925,9 @@ void PreferencesPanel::resized()
     }
 
     auto page = contentArea().withTrimmedTop (px (76.0f));
-    for (auto* p : { &foldersPage, &interfacePage, &audioPage, &sessionPage, &aboutPage })
+    for (auto* p : { &foldersPage, &interfacePage, &audioPage, &sessionPage })
         p->setBounds (page);
+    aboutPage.setBounds (contentArea());        // no page heading on About: it keeps that height
 
     const auto local = page.withZeroOrigin();
 
@@ -605,28 +993,36 @@ void PreferencesPanel::resized()
         sessionNote.setBounds (r.removeFromTop (px (130.0f)));
     }
 
-    // About (base scale: 414 of the page's 440)
+    // About (base scale: 568 x 516, no heading). The right column (132 wide) holds the avatar and its handle;
+    // everything beside it is 420 wide, everything below y = 134 uses the whole width.
     {
-        auto r = local;
-        aboutName.setBounds (r.removeFromTop (px (28.0f)));
-        aboutVersion.setBounds (r.removeFromTop (px (18.0f)));
-        r.removeFromTop (px (8.0f));
-        aboutDescription.setBounds (r.removeFromTop (px (38.0f)));
-        r.removeFromTop (px (20.0f));
+        const int w = aboutPage.getWidth();
+        const int columnW = px (132.0f);
+        const int leftW = w - columnW - px (16.0f);
+        const auto captionRule = [&] (juce::Label& caption, int y, juce::Rectangle<int>& ruleOut)
+        {
+            const int capW = (int) std::ceil (theme::silkWidth (caption.getText(), 11.0f * s)) + px (4.0f);
+            caption.setBounds (0, y, capW, px (18.0f));
+            ruleOut = { capW + px (10.0f), y + px (8.0f), w - capW - px (10.0f), 2 };
+        };
 
-        aboutLicenseCaption.setBounds (r.removeFromTop (px (18.0f)));
-        r.removeFromTop (px (6.0f));
-        aboutLicense.setBounds (r.removeFromTop (px (20.0f)));
-        aboutCopyright.setBounds (r.removeFromTop (px (20.0f)));
-        r.removeFromTop (px (4.0f));
-        aboutSource.setBounds (r.removeFromTop (px (22.0f)).withWidth (px (420.0f)));
-        r.removeFromTop (px (20.0f));
+        aboutRects.plate = { 0, 0, leftW, px (60.0f) };
+        aboutDescription.setBounds (0, px (68.0f), leftW, px (40.0f));
 
-        aboutBuiltWithCaption.setBounds (r.removeFromTop (px (18.0f)));
-        r.removeFromTop (px (6.0f));
-        aboutCredits.setBounds (r.removeFromTop (px (102.0f)));
-        r.removeFromTop (px (14.0f));
-        aboutTrademarks.setBounds (r.removeFromTop (px (52.0f)));
+        avatar->setBounds (w - columnW, 0, columnW, px (102.0f));
+        aboutHandle.setBounds (w - columnW, px (104.0f), columnW, px (18.0f));
+
+        captionRule (aboutLicenseCaption, px (134.0f), aboutRects.licenceRule);
+        aboutLicense.setBounds (0, px (158.0f), w, px (20.0f));
+        aboutCopyright.setBounds (0, px (178.0f), w, px (20.0f));
+        aboutSource->setBounds (0, px (206.0f), juce::jmin (w, aboutSource->preferredWidth()), px (30.0f));
+
+        captionRule (aboutBuiltWithCaption, px (256.0f), aboutRects.builtWithRule);
+        aboutRects.credits = { 0, px (282.0f), w, aboutPage.getHeight() - px (282.0f) };
+
+        const int trademarkH = px (32.0f);
+        aboutTrademarks.setBounds (0, aboutPage.getHeight() - trademarkH, w, trademarkH);
+        aboutRects.trademarkRule = { 0, aboutPage.getHeight() - trademarkH - px (12.0f), w, 2 };
     }
 }
 

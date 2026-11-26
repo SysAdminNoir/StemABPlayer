@@ -63,6 +63,13 @@ juce_add_binary_data(StemAB_Fonts
         ${PROJECT_SOURCE_DIR}/resources/fonts/JetBrainsMono-Regular.ttf
         ${PROJECT_SOURCE_DIR}/resources/fonts/JetBrainsMono-SemiBold.ttf)
 
+# The author's avatar for the About page (resources/images).
+juce_add_binary_data(StemAB_Images
+    HEADER_NAME "StemABImages.h"
+    NAMESPACE   StemABImages
+    SOURCES
+        ${PROJECT_SOURCE_DIR}/resources/images/avatar.jpg)
+
 # STEMAB_SOURCE_DIR: the file choosers open in the repo's "Audio Files/" and "Stem Files/" when present.
 target_compile_definitions(StemAB_App PRIVATE
     JUCE_WEB_BROWSER=0
@@ -93,6 +100,7 @@ target_link_libraries(StemAB_App
         StemAB_Load
         StemAB_JuceModules
         StemAB_Fonts
+        StemAB_Images
         juce::juce_gui_extra
         juce::juce_audio_utils
         juce::juce_audio_devices

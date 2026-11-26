@@ -6,12 +6,16 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include "app/AppSettings.h"
 #include "app/ui/Widgets.h"
 
 namespace stemab
 {
+
+class AvatarBadge;
+class LinkPad;
 
 /** The Preferences content: a section list on the left (Folders, Interface, Audio, Session, About) and the chosen
     section on the right. Reads and writes AppSettings directly; the interface size goes through
@@ -56,6 +60,7 @@ private:
 
     void refreshFolders();
     void refreshAboutColours();
+    void paintAbout (juce::Graphics&) const;
     void browseFolder (AppSettings::Folder);
     FolderRow& rowFor (AppSettings::Folder f)      { return folderRows[f == AppSettings::Folder::originals ? 0 : 1]; }
     juce::Rectangle<int> contentArea() const;
@@ -91,12 +96,27 @@ private:
     juce::ToggleButton resumeSession { "Resume last session on launch" };
     juce::Label sessionNote, settingsFileNote;
 
-    // About
+    // About (no page heading: the page uses the whole content area; the panel paints the plate, rules and credits)
+    struct CreditRow
+    {
+        juce::String name, licence, detail;
+    };
+
+    struct AboutRects
+    {
+        juce::Rectangle<int> plate, licenceRule, builtWithRule, credits, trademarkRule;
+    };
+
     juce::Component aboutPage;
-    juce::Label aboutName, aboutVersion, aboutDescription;
+    std::unique_ptr<AvatarBadge> avatar;
+    juce::HyperlinkButton aboutHandle;
+    juce::Label aboutDescription;
     juce::Label aboutLicenseCaption, aboutLicense, aboutCopyright;
-    juce::HyperlinkButton aboutSource;
-    juce::Label aboutBuiltWithCaption, aboutCredits, aboutTrademarks;
+    std::unique_ptr<LinkPad> aboutSource;
+    juce::Label aboutBuiltWithCaption, aboutTrademarks;
+    juce::String aboutVersionText;
+    std::vector<CreditRow> creditRows;
+    AboutRects aboutRects;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreferencesPanel)
 };
