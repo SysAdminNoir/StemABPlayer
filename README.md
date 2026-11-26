@@ -6,7 +6,7 @@ crossfade between A and B. It tells you, by ear and by number, how well the stem
 In **Stem vs Stem** mode, A is a second set of stems instead, so you can compare two separations of the same
 song.
 
-**[Download the latest release](https://github.com/SysAdminNoir/StemABPlayer/releases/latest)** (Windows 10/11 x64; unzip and run, no installer).
+**[Download the latest release](https://github.com/argentstygian/StemABPlayer/releases/latest)** (Windows 10/11 x64; unzip and run, no installer).
 
 ![Stem A/B Player main window](docs/images/main-window.png)
 
@@ -70,7 +70,7 @@ The full guide is in [docs/USER-GUIDE.md](docs/USER-GUIDE.md).
 
 ## Installing a release build
 
-Download `StemABPlayer-<version>-win64.zip` from [Releases](https://github.com/SysAdminNoir/StemABPlayer/releases).
+Download `StemABPlayer-<version>-win64.zip` from [Releases](https://github.com/argentstygian/StemABPlayer/releases).
 It contains `Stem AB Player.exe` with the three FFmpeg DLLs next to it (`avcodec-*.dll`, `avformat-*.dll`,
 `avutil-*.dll`) and the docs. Unzip it anywhere and run the exe; there is no installer. Release builds include
 ASIO support. Settings live in `%APPDATA%\StemABPlayer\` (see the user guide).

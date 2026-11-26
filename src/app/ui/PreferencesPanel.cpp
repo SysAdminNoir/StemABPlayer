@@ -15,7 +15,7 @@ namespace
     const juce::String enDash (juce::CharPointer_UTF8 ("\xe2\x80\x93"));
     const juce::String copyrightSign (juce::CharPointer_UTF8 ("\xc2\xa9"));
 
-    constexpr const char* sourceCodeUrl = "https://github.com/SysAdminNoir/StemABPlayer";
+    constexpr const char* sourceCodeUrl = "https://github.com/argentstygian/StemABPlayer";
 
     /** The running application's version, e.g. "1.0.0". */
     juce::String appVersionString()
@@ -271,7 +271,7 @@ PreferencesPanel::PreferencesPanel (AppSettings& s, juce::AudioDeviceManager& dm
     styleNote (aboutCopyright);
     aboutPage.addAndMakeVisible (aboutCopyright);
 
-    aboutSource.setButtonText ("Source code: github.com/SysAdminNoir/StemABPlayer");
+    aboutSource.setButtonText ("Source code: github.com/argentstygian/StemABPlayer");
     aboutSource.setURL (juce::URL (sourceCodeUrl));
     aboutSource.setTooltip (sourceCodeUrl);
     aboutPage.addAndMakeVisible (aboutSource);
