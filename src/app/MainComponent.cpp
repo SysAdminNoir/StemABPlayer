@@ -190,6 +190,22 @@ MainComponent::MainComponent()
     deck.toStartButton.onClick = [this] { seekTo (0); };
     deck.backButton.onClick = [this] { seekBySeconds (-5.0); };
     deck.forwardButton.onClick = [this] { seekBySeconds (5.0); };
+    // Click the time readout, type a time ("1:23.456", "83.5", "+5", "-2.5"), Enter: seekTo / seekBySeconds clamp it
+    deck.onTimeEntered = [this] (double seconds, bool relative)
+    {
+        const double rate = engine.getSessionSampleRate();
+        if (rate <= 0.0 || ! std::isfinite (seconds))
+            return;
+        if (relative)
+            seekBySeconds (seconds);
+        else
+            seekTo ((juce::int64) std::llround (seconds * rate));
+    };
+    deck.onTimeEditorClosed = [this]
+    {
+        if (isShowing())
+            grabKeyboardFocus();   // the shortcuts again (the keys and the editor never hand the focus back themselves)
+    };
     deck.loopButton.onClick = [this]
     {
         engine.setLoopRegion (0, 0);    // whole track for now
@@ -482,7 +498,9 @@ void MainComponent::timerCallback()
     const double rate = engine.getSessionSampleRate();
     const auto playhead = engine.getPlayheadSample();
 
-    if (len > 0 && rate > 0.0 && loader.getPlaybackSession() != nullptr)
+    const bool timeEditable = len > 0 && rate > 0.0 && loader.getPlaybackSession() != nullptr;
+    deck.setTimeEditable (timeEditable);    // click-to-type only with a session to seek in
+    if (timeEditable)
         deck.setTime (format::minutesSecondsMillis ((double) playhead / rate),
                       "Sample " + format::withThousands (playhead) + "\nTotal " + format::withThousands (len));
     else if (previewLength > 0 && previewRate > 0.0)

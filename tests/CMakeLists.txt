@@ -12,6 +12,8 @@ add_executable(StemAB_Tests
     SessionStateTests.cpp
     StemSetTests.cpp
     WaveformSummaryTests.cpp
+    # app/ui/Format.h is header-only (juce_core): the time-entry parser is tested here.
+    FormatTests.cpp
     # The resume-session value type lives with the app but needs only juce_core: tested here directly.
     ${PROJECT_SOURCE_DIR}/src/app/SessionState.cpp
     # The settings file (juce_data_structures): the colour-palette round trip, in a temporary file.
